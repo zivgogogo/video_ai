@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}新建项目 — AI 剧本创作工具{% endblock %}
+{% block content %}
+<h1>新建项目</h1>
+<div class="panel">
+    <form hx-post="/api/projects" hx-target="#create-result" hx-swap="innerHTML" id="create-form">
+        <label>项目名称
+            <input type="text" name="title" required placeholder="给你的剧本起个名字">
+        </label>
+        <label>来源小说
+            <input type="text" name="source_novel" placeholder="选填，小说名称">
+        </label>
+        <label>原作者
+            <input type="text" name="source_author" placeholder="选填，原作者笔名">
+        </label>
+        <label>剧本类型
+            <select name="script_type">
+                <option value="film">电影</option>
+                <option value="tv_series">电视剧</option>
+                <option value="stage_play">舞台剧</option>
+                <option value="animation">动画</option>
+                <option value="other">其他</option>
+            </select>
+        </label>
+
+        <div id="tv-options" style="display:none">
+            <label>目标集数
+                <input type="number" name="target_episodes" placeholder="如 40" min="1">
+            </label>
+        </div>
+        <div id="film-options" style="display:none">
+            <label>目标时长
+                <input type="text" name="target_duration" placeholder="如 120min">
+            </label>
+        </div>
+
+        <label>风格
+            <input type="text" name="style" placeholder="如 传统武侠、现代都市（选填）">
+        </label>
+
+        <input type="hidden" name="config_json" value="{}">
+
+        <button type="submit" style="margin-top:0.5em">创建项目</button>
+    </form>
+</div>
+<div id="create-result"></div>
+
+<script>
+document.querySelector('select[name="script_type"]').addEventListener('change', function() {
+    document.getElementById('tv-options').style.display = this.value === 'tv_series' ? 'block' : 'none';
+    document.getElementById('film-options').style.display = this.value === 'film' ? 'block' : 'none';
+});
+
+document.getElementById('create-form').addEventListener('submit', function() {
+    const config = {};
+    const eps = document.querySelector('input[name="target_episodes"]');
+    const dur = document.querySelector('input[name="target_duration"]');
+    const style = document.querySelector('input[name="style"]');
+    if (eps && eps.value) config.target_episodes = parseInt(eps.value);
+    if (dur && dur.value) config.target_duration = dur.value;
+    if (style && style.value) config.style = style.value;
+    document.querySelector('input[name="config_json"]').value = JSON.stringify(config);
+});
+</script>
+{% endblock %}

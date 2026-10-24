@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}剧本预览 — {{ project.title }}{% endblock %}
+{% block content %}
+<h1>{{ project.title }}</h1>
+
+<div id="script-load-area" hx-get="/api/projects/{{ project.id }}/stage/5" hx-trigger="load">
+    <p style="color:var(--fg-muted);text-align:center;padding:3em">加载中...</p>
+</div>
+
+<div id="editor-toolbar" style="display:none;margin-top:1em" class="flex gap-1">
+    <button id="edit-btn" onclick="enterEditMode()">✏️ 编辑剧本</button>
+    <a href="/projects/{{ project.id }}" class="btn btn-secondary" style="display:inline-flex;text-decoration:none">← 返回工作台</a>
+</div>
+
+<div id="editor-actions" style="display:none;margin-top:1em" class="flex gap-1">
+    <button id="save-btn" onclick="saveEdit()" style="background:linear-gradient(135deg,var(--success),#059669)">💾 保存修改</button>
+    <button id="cancel-btn" onclick="cancelEdit()" class="btn-secondary">✕ 取消编辑</button>
+</div>
+
+<div id="toast" class="text-muted" style="display:none;position:fixed;top:1em;right:1em;padding:0.75em 1.5em;border-radius:var(--radius);font-weight:600;z-index:9999;animation:slideDown 0.3s ease"></div>
+
+<script>
+let _originalText = '';
+let _scriptText = '';
+
+document.getElementById('script-load-area').addEventListener('htmx:afterSwap', function(e) {
+    const data = JSON.parse(e.detail.xhr.responseText);
+    if (data.status === 'not_run' || !data.data) {
+        e.target.innerHTML = '<div class="empty">剧本尚未生成。<br><a href="/projects/{{ project.id }}">前往工作台生成剧本</a></div>';
+        return;
+    }
+    _scriptText = data.data.screenplay_text || data.data.yaml_text || '';
+    _originalText = _scriptText;
+    if (_scriptText) {
+        renderReadOnly();
+        document.getElementById('editor-toolbar').style.display = 'flex';
+    } else {
+        e.target.innerHTML = '<div class="empty">剧本数据为空。</div>';
+    }
+});
+
+function renderReadOnly() {
+    const area = document.getElementById('script-load-area');
+    const pre = document.createElement('pre');
+    pre.id = 'script-viewer';
+    pre.textContent = _scriptText.substring(0, 100000);
+    area.innerHTML = '';
+    area.appendChild(pre);
+    document.getElementById('editor-toolbar').style.display = 'flex';
+    document.getElementById('editor-actions').style.display = 'none';
+}
+
+function enterEditMode() {
+    const area = document.getElementById('script-load-area');
+    area.innerHTML = '';
+    const ta = document.createElement('textarea');
+    ta.id = 'script-editor';
+    ta.value = _scriptText;
+    ta.spellcheck = false;
+    area.appendChild(ta);
+    document.getElementById('editor-toolbar').style.display = 'none';
+    document.getElementById('editor-actions').style.display = 'flex';
+}
+
+function cancelEdit() {
+    _scriptText = _originalText;
+    renderReadOnly();
+}
+
+async function saveEdit() {
+    const ta = document.getElementById('script-editor');
+    const newText = ta ? ta.value : _scriptText;
+
+    const saveBtn = document.getElementById('save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中...';
+
+    try {
+        const res = await fetch('/api/projects/{{ project.id }}/stage/5', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({screenplay_text: newText}),
+        });
+        if (res.ok) {
+            _scriptText = newText;
+            _originalText = newText;
+            renderReadOnly();
+            showToast('✅ 修改已保存', false);
+        } else {
+            const err = await res.json();
+            showToast('保存失败：' + (err.detail || '请重试'), true);
+        }
+    } catch (e) {
+        showToast('保存失败，请检查网络', true);
+    }
+
+    saveBtn.disabled = false;
+    saveBtn.textContent = '💾 保存修改';
+}
+
+function showToast(msg, isError) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.style.background = isError ? 'var(--danger)' : 'var(--success)';
+    toast.style.color = '#fff';
+    toast.style.display = 'block';
+    toast.style.opacity = '1';
+    setTimeout(function() {
+        toast.style.transition = 'opacity 0.3s';
+        toast.style.opacity = '0';
+        setTimeout(function() { toast.style.display = 'none'; }, 300);
+    }, 2000);
+}
+</script>
+{% endblock %}

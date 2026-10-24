@@ -1,0 +1,778 @@
+{% extends "base.html" %}
+{% block title %}场景编排 — {{ project.title }}{% endblock %}
+{% block content %}
+
+<!-- SortableJS CDN -->
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+
+<div class="kanban-toolbar">
+    <div class="kanban-toolbar-left">
+        <h1 class="kanban-title">📋 场景编排 — {{ project.title }}</h1>
+        <span id="scene-count" class="kanban-badge">-- 场</span>
+        <span id="save-indicator" class="kanban-save-indicator" style="display:none">💾 已保存</span>
+    </div>
+    <div class="kanban-toolbar-right">
+        <button onclick="saveAllScenes()" class="btn" id="save-btn">💾 保存修改</button>
+        <button onclick="autoRenumber()" class="btn-secondary">🔢 重新编号</button>
+        <button onclick="addNewScene()" class="btn-secondary">➕ 添加场景</button>
+        <button onclick="exportBoard('json')" class="btn-secondary" title="导出通用 JSON 编排文件">💾 导出JSON</button>
+        <button onclick="exportBoard('md')" class="btn-secondary" title="导出人类可读 Markdown">📄 导出MD</button>
+        <button onclick="document.getElementById('import-file').click()" class="btn-secondary" title="导入 JSON 编排文件并覆盖当前编排">📥 导入编排</button>
+        <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importBoard(this)">
+        <a href="/projects/{{ project.id }}" class="btn btn-secondary" style="text-decoration:none">← 返回工作台</a>
+        <button onclick="triggerStage4()" class="btn" style="background:linear-gradient(135deg,var(--success),#059669)">▶ 继续 Stage 4</button>
+    </div>
+</div>
+
+<div class="kanban-board" id="kanban-board">
+    <div style="text-align:center;color:var(--fg-muted);padding:3em;grid-column:1/-1">
+        <p>加载中...</p>
+    </div>
+</div>
+
+<!-- v3：章节进度拉条 + 集数快捷跳转 -->
+<div id="board-slider-row" style="display:none;align-items:center;gap:0.75em;margin:0.25em 0 1em;padding:0.6em 0.9em;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px">
+    <span style="color:var(--fg-muted);font-size:0.85em;white-space:nowrap">📜 章节进度</span>
+    <input type="range" id="board-slider" min="0" max="1000" value="0" style="flex:1;cursor:pointer">
+    <span id="slider-label" style="color:var(--fg-muted);font-size:0.85em;white-space:nowrap;min-width:7em;text-align:right">第1集</span>
+    <span id="ep-jump" style="display:flex;gap:0.35em;flex-wrap:wrap"></span>
+</div>
+
+<!-- Merge mode overlay -->
+<div id="merge-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);z-index:9998;align-items:center;justify-content:center">
+    <div style="background:rgba(20,20,45,0.95);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:2em;text-align:center;max-width:400px;box-shadow:var(--shadow-lg)">
+        <p style="font-size:1.1em;margin-bottom:1em;color:var(--fg-primary)">🔗 合并场景</p>
+        <p style="color:var(--fg-secondary);margin-bottom:1.5em">点击两个场景卡片进行选择，然后确认合并。</p>
+        <div id="merge-selection" style="display:flex;gap:0.75em;justify-content:center;margin-bottom:1.5em;flex-wrap:wrap">
+            <span style="color:var(--fg-muted);font-size:0.9em">尚未选择</span>
+        </div>
+        <div style="display:flex;gap:0.5em;justify-content:center">
+            <button onclick="confirmMerge()" id="merge-confirm-btn" class="btn" disabled>确认合并</button>
+            <button onclick="cancelMerge()" class="btn-secondary">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="kanban-toast" style="display:none;position:fixed;top:1.5em;right:1.5em;padding:0.75em 1.5em;border-radius:var(--radius);font-weight:600;z-index:9999;animation:slideDown 0.3s ease;font-size:0.9em"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════
+let allScenes = [];
+let episodeSummaries = [];
+let scriptType = 'tv_series';
+let mergeMode = false;
+let mergeSelected = [];
+let sortables = [];
+
+const PROJECT_ID = '{{ project.id }}';
+
+// ═══════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', initKanban);
+
+async function initKanban() {
+    try {
+        const res = await fetch('/api/projects/' + PROJECT_ID + '/scenes');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        allScenes = data.scenes || [];
+        episodeSummaries = data.episode_summaries || [];
+        scriptType = data.script_type || 'tv_series';
+        renderBoard();
+    } catch (e) {
+        document.getElementById('kanban-board').innerHTML =
+            '<div class="empty"><p>加载场景数据失败：' + e.message + '</p>' +
+            '<p style="margin-top:0.5em">请确认 Stage 3（剧本结构设计）已经完成。</p>' +
+            '<a href="/projects/' + PROJECT_ID + '" class="btn" style="display:inline-flex;text-decoration:none;margin-top:1em">← 返回工作台</a></div>';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Render
+// ═══════════════════════════════════════════════════════════════
+function renderBoard() {
+    const board = document.getElementById('kanban-board');
+    const countEl = document.getElementById('scene-count');
+    board.innerHTML = '';
+    countEl.textContent = allScenes.length + ' 场';
+
+    if (allScenes.length === 0) {
+        board.innerHTML = '<div class="empty" style="grid-column:1/-1"><p>暂无场景数据</p><p style="margin-top:0.5em">请先运行 Stage 3 生成场景结构，或点击"添加场景"手动创建。</p></div>';
+        return;
+    }
+
+    // Group scenes by episode
+    const groups = new Map();
+    allScenes.forEach(s => {
+        const ep = s.episode || 1;
+        if (!groups.has(ep)) groups.set(ep, []);
+        groups.get(ep).push(s);
+    });
+
+    // Sort episodes
+    const episodes = Array.from(groups.keys()).sort((a, b) => a - b);
+
+    // Destroy existing sortables
+    sortables.forEach(s => s.destroy());
+    sortables = [];
+
+    // Create columns
+    episodes.forEach(ep => {
+        const scenes = groups.get(ep);
+        const epSummary = episodeSummaries.find(e => e.episode === ep) || {};
+
+        const column = document.createElement('div');
+        column.className = 'kanban-column';
+        column.dataset.episode = ep;
+
+        let headerHTML = '<div class="kanban-column-header">' +
+            '<div class="kanban-column-title">📺 第 ' + ep + ' 集</div>' +
+            '<span class="kanban-column-count">' + scenes.length + ' 场</span>' +
+        '</div>';
+
+        if (epSummary.title) {
+            headerHTML += '<div class="kanban-column-subtitle">' + escapeHTML(epSummary.title) + '</div>';
+        }
+        if (epSummary.summary) {
+            headerHTML += '<div class="kanban-column-summary">' + escapeHTML(epSummary.summary) + '</div>';
+        }
+        if (epSummary.cliffhanger) {
+            headerHTML += '<div class="kanban-column-cliffhanger">🎬 ' + escapeHTML(epSummary.cliffhanger) + '</div>';
+        }
+
+        column.innerHTML = headerHTML;
+
+        const body = document.createElement('div');
+        body.className = 'kanban-column-body';
+        body.dataset.episode = ep;
+
+        scenes.forEach(s => {
+            body.appendChild(createCard(s));
+        });
+
+        column.appendChild(body);
+
+        // Add scene button
+        const addBtn = document.createElement('button');
+        addBtn.className = 'kanban-add-scene';
+        addBtn.textContent = '+ 添加场景到第 ' + ep + ' 集';
+        addBtn.onclick = function() { addNewScene(ep); };
+        column.appendChild(addBtn);
+
+        board.appendChild(column);
+
+        // Init Sortable on this column
+        const sortable = Sortable.create(body, {
+            group: 'scenes',
+            animation: 200,
+            easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            dragClass: 'sortable-drag',
+            handle: '.scene-card-drag-handle',
+            onEnd: function(evt) {
+                onDragEnd(evt);
+            },
+        });
+        sortables.push(sortable);
+    });
+
+    setupSlider();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3：章节进度拉条 & 集数快捷跳转
+// ═══════════════════════════════════════════════════════════════
+function setupSlider() {
+    const board = document.getElementById('kanban-board');
+    const row = document.getElementById('board-slider-row');
+    const slider = document.getElementById('board-slider');
+    const jump = document.getElementById('ep-jump');
+    if (!board || !slider) return;
+
+    const cols = board.querySelectorAll('.kanban-column');
+    if (cols.length > 1) {
+        row.style.display = 'flex';
+    } else {
+        row.style.display = 'none';
+        return;
+    }
+
+    // 集数快捷跳转按钮
+    jump.innerHTML = '';
+    cols.forEach(c => {
+        const ep = c.dataset.episode;
+        const b = document.createElement('button');
+        b.textContent = '第' + ep + '集';
+        b.style.cssText = 'font-size:0.75em;padding:0.25em 0.6em;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:var(--fg-secondary);cursor:pointer';
+        b.onclick = function() {
+            board.scrollTo({ left: Math.max(0, c.offsetLeft - board.offsetLeft - 10), behavior: 'smooth' });
+        };
+        jump.appendChild(b);
+    });
+
+    // 拉条 → 横向滚动
+    slider.oninput = function() {
+        const max = board.scrollWidth - board.clientWidth;
+        board.scrollLeft = max * (slider.value / 1000);
+    };
+    // 横向滚动 → 拉条 & 标签同步
+    board.onscroll = updateSliderState;
+    window.onresize = updateSliderState;
+    updateSliderState();
+}
+
+function updateSliderState() {
+    const board = document.getElementById('kanban-board');
+    const slider = document.getElementById('board-slider');
+    const label = document.getElementById('slider-label');
+    if (!board || !slider) return;
+    const max = board.scrollWidth - board.clientWidth;
+    if (max > 0) slider.value = Math.round(board.scrollLeft / max * 1000);
+    // 当前视口对应的集数
+    let current = 1, total = 0;
+    board.querySelectorAll('.kanban-column').forEach(c => {
+        total++;
+        if (c.offsetLeft - board.offsetLeft <= board.scrollLeft + 100) current = c.dataset.episode;
+    });
+    if (label) label.textContent = '第' + current + '集 / 共' + total + '集';
+}
+
+function createCard(scene) {
+    const card = document.createElement('div');
+    card.className = 'scene-card';
+    card.dataset.sceneId = scene.id;
+    card.dataset.episode = scene.episode || 1;
+
+    let charTags = '';
+    if (scene.characters_present && scene.characters_present.length > 0) {
+        charTags = scene.characters_present.map(c =>
+            '<span class="char-tag">' + escapeHTML(c) + '</span>'
+        ).join('');
+    }
+
+    card.innerHTML =
+        '<div class="scene-card-header">' +
+            '<span class="scene-card-drag-handle" title="拖拽排序">⠿</span>' +
+            '<span class="scene-card-id">' + escapeHTML(scene.id) + '</span>' +
+            '<span class="scene-card-seq">#' + (scene.sequence || '?') + '</span>' +
+            '<div class="scene-card-header-actions">' +
+                '<button class="card-action-btn" onclick="editScene(\'' + scene.id + '\')" title="编辑">✏️</button>' +
+                '<button class="card-action-btn" onclick="splitScene(\'' + scene.id + '\')" title="拆分">✂️</button>' +
+                '<button class="card-action-btn card-action-danger" onclick="deleteScene(\'' + scene.id + '\')" title="删除">🗑️</button>' +
+            '</div>' +
+        '</div>' +
+        '<div class="scene-card-body">' +
+            (scene.location ? '<div class="scene-card-location">📍 ' + escapeHTML(scene.location) + (scene.time ? ' · 🕐 ' + escapeHTML(scene.time) : '') + '</div>' : '') +
+            (scene.setting_description ? '<div class="scene-card-setting">' + escapeHTML(scene.setting_description) + '</div>' : '') +
+            (charTags ? '<div class="scene-card-characters">' + charTags + '</div>' : '') +
+            '<div class="scene-card-summary">' + escapeHTML(scene.summary || '（无概要）') + '</div>' +
+            (scene.source_chapter ? '<div class="scene-card-source">📖 第 ' + scene.source_chapter + ' 章</div>' : '') +
+        '</div>' +
+        '<div class="scene-card-edit-form" style="display:none"></div>';
+
+    // Merge mode click handler
+    card.addEventListener('click', function(e) {
+        if (mergeMode && !e.target.closest('button')) {
+            toggleMergeSelect(scene.id, card);
+        }
+    });
+
+    return card;
+}
+
+function escapeHTML(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Drag & Drop
+// ═══════════════════════════════════════════════════════════════
+function onDragEnd(evt) {
+    // Sync scene data from DOM
+    syncScenesFromDOM();
+}
+
+function syncScenesFromDOM() {
+    const newScenes = [];
+    const columns = document.querySelectorAll('.kanban-column-body');
+    columns.forEach(col => {
+        const ep = parseInt(col.dataset.episode) || 1;
+        const cards = col.querySelectorAll('.scene-card');
+        cards.forEach((card, idx) => {
+            const sceneId = card.dataset.sceneId;
+            const scene = allScenes.find(s => s.id === sceneId);
+            if (scene) {
+                scene.episode = ep;
+                scene.sequence = idx + 1;
+                newScenes.push(scene);
+            }
+        });
+    });
+    allScenes = newScenes;
+    updateCardEpisodes();
+}
+
+function updateCardEpisodes() {
+    // Update data attributes after sync
+    const columns = document.querySelectorAll('.kanban-column-body');
+    columns.forEach(col => {
+        const ep = parseInt(col.dataset.episode) || 1;
+        const cards = col.querySelectorAll('.scene-card');
+        cards.forEach((card, idx) => {
+            card.dataset.episode = ep;
+            const seqEl = card.querySelector('.scene-card-seq');
+            if (seqEl) seqEl.textContent = '#' + (idx + 1);
+        });
+    });
+    document.getElementById('scene-count').textContent = allScenes.length + ' 场';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Edit Scene
+// ═══════════════════════════════════════════════════════════════
+function editScene(sceneId) {
+    const card = document.querySelector('[data-scene-id="' + sceneId + '"]');
+    if (!card) return;
+
+    const scene = allScenes.find(s => s.id === sceneId);
+    if (!scene) return;
+
+    const editForm = card.querySelector('.scene-card-edit-form');
+    const body = card.querySelector('.scene-card-body');
+
+    if (editForm.style.display === 'block') {
+        // Save edit
+        saveEditForm(scene, card, editForm);
+        return;
+    }
+
+    // Enter edit mode
+    card.classList.add('editing');
+    body.style.display = 'none';
+    editForm.style.display = 'block';
+
+    editForm.innerHTML =
+        '<div class="edit-form-grid">' +
+            '<label>地点<input type="text" id="edit-location-' + sceneId + '" value="' + escapeHTML(scene.location || '') + '"></label>' +
+            '<label>时间<input type="text" id="edit-time-' + sceneId + '" value="' + escapeHTML(scene.time || '') + '"></label>' +
+            '<label>幕 (Act)<input type="number" id="edit-act-' + sceneId + '" value="' + (scene.act || 1) + '" min="1" max="10"></label>' +
+            '<label>集 (Episode)<input type="number" id="edit-episode-' + sceneId + '" value="' + (scene.episode || 1) + '" min="1" max="100"></label>' +
+            '<label>来源章节<input type="number" id="edit-source-' + sceneId + '" value="' + (scene.source_chapter || 0) + '" min="0"></label>' +
+        '</div>' +
+        '<label>场景环境描述<input type="text" id="edit-setting-' + sceneId + '" value="' + escapeHTML(scene.setting_description || '') + '"></label>' +
+        '<label>出场人物 (逗号分隔)<input type="text" id="edit-chars-' + sceneId + '" value="' + escapeHTML((scene.characters_present || []).join('，')) + '"></label>' +
+        '<label>概要<textarea id="edit-summary-' + sceneId + '" rows="3">' + escapeHTML(scene.summary || '') + '</textarea></label>' +
+        '<div class="edit-form-actions">' +
+            '<button onclick="saveEditForm(getSceneById(\'' + sceneId + '\'), document.querySelector(\'[data-scene-id=\\\'' + sceneId + '\\\']\'), document.querySelector(\'[data-scene-id=\\\'' + sceneId + '\\\'] .scene-card-edit-form\'))" class="btn">✅ 确认</button>' +
+            '<button onclick="cancelEdit(\'' + sceneId + '\')" class="btn-secondary">✕ 取消</button>' +
+        '</div>';
+}
+
+function getSceneById(id) {
+    return allScenes.find(s => s.id === id);
+}
+
+function cancelEdit(sceneId) {
+    const card = document.querySelector('[data-scene-id="' + sceneId + '"]');
+    if (!card) return;
+    card.classList.remove('editing');
+    const body = card.querySelector('.scene-card-body');
+    const editForm = card.querySelector('.scene-card-edit-form');
+    if (body) body.style.display = '';
+    if (editForm) editForm.style.display = 'none';
+}
+
+function saveEditForm(scene, card, editForm) {
+    const sceneId = scene.id;
+
+    scene.location = document.getElementById('edit-location-' + sceneId)?.value || '';
+    scene.time = document.getElementById('edit-time-' + sceneId)?.value || '';
+    scene.act = parseInt(document.getElementById('edit-act-' + sceneId)?.value) || 1;
+    scene.episode = parseInt(document.getElementById('edit-episode-' + sceneId)?.value) || 1;
+    scene.source_chapter = parseInt(document.getElementById('edit-source-' + sceneId)?.value) || 0;
+    scene.setting_description = document.getElementById('edit-setting-' + sceneId)?.value || '';
+    const charsStr = document.getElementById('edit-chars-' + sceneId)?.value || '';
+    scene.characters_present = charsStr.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    scene.summary = document.getElementById('edit-summary-' + sceneId)?.value || '';
+
+    // Exit edit mode
+    card.classList.remove('editing');
+    editForm.style.display = 'none';
+    const body = card.querySelector('.scene-card-body');
+    if (body) body.style.display = '';
+
+    // Re-render the card body
+    let charTags = '';
+    if (scene.characters_present && scene.characters_present.length > 0) {
+        charTags = scene.characters_present.map(c =>
+            '<span class="char-tag">' + escapeHTML(c) + '</span>'
+        ).join('');
+    }
+
+    body.innerHTML =
+        (scene.location ? '<div class="scene-card-location">📍 ' + escapeHTML(scene.location) + (scene.time ? ' · 🕐 ' + escapeHTML(scene.time) : '') + '</div>' : '') +
+        (scene.setting_description ? '<div class="scene-card-setting">' + escapeHTML(scene.setting_description) + '</div>' : '') +
+        (charTags ? '<div class="scene-card-characters">' + charTags + '</div>' : '') +
+        '<div class="scene-card-summary">' + escapeHTML(scene.summary || '（无概要）') + '</div>' +
+        (scene.source_chapter ? '<div class="scene-card-source">📖 第 ' + scene.source_chapter + ' 章</div>' : '');
+
+    // Update the card's episode data (may have changed)
+    card.dataset.episode = scene.episode;
+
+    showToast('✅ 场景 ' + scene.id + ' 已修改（记得保存）');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Add Scene
+// ═══════════════════════════════════════════════════════════════
+function addNewScene(targetEpisode) {
+    if (!targetEpisode) {
+        // Ask which episode
+        const ep = prompt('添加到第几集？', '1');
+        if (!ep) return;
+        targetEpisode = parseInt(ep);
+        if (isNaN(targetEpisode)) return;
+    }
+
+    const maxSeq = allScenes
+        .filter(s => s.episode === targetEpisode)
+        .reduce((max, s) => Math.max(max, s.sequence || 0), 0);
+
+    const newScene = {
+        id: 'scene_new_' + Date.now(),
+        act: 1,
+        episode: targetEpisode,
+        sequence: maxSeq + 1,
+        location: '',
+        time: '',
+        setting_description: '',
+        characters_present: [],
+        summary: '新场景',
+        source_chapter: 0,
+    };
+
+    allScenes.push(newScene);
+
+    // Find the column body and append card
+    const colBody = document.querySelector('.kanban-column-body[data-episode="' + targetEpisode + '"]');
+    if (colBody) {
+        colBody.appendChild(createCard(newScene));
+    }
+
+    document.getElementById('scene-count').textContent = allScenes.length + ' 场';
+
+    // Auto-enter edit mode
+    setTimeout(() => editScene(newScene.id), 100);
+
+    showToast('➕ 新场景已添加（记得保存）');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Delete Scene
+// ═══════════════════════════════════════════════════════════════
+async function deleteScene(sceneId) {
+    if (!confirm('确定要删除场景 ' + sceneId + ' 吗？此操作不可恢复。')) return;
+
+    const card = document.querySelector('[data-scene-id="' + sceneId + '"]');
+    if (card) card.remove();
+
+    allScenes = allScenes.filter(s => s.id !== sceneId);
+    syncScenesFromDOM();
+    showToast('🗑️ 场景 ' + sceneId + ' 已删除（记得保存）');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Split Scene
+// ═══════════════════════════════════════════════════════════════
+async function splitScene(sceneId) {
+    const scene = allScenes.find(s => s.id === sceneId);
+    if (!scene) return;
+
+    const splitDesc = prompt('请输入拆分描述（前半部分的内容范围）：', '前半部分');
+    if (!splitDesc) return;
+
+    try {
+        const res = await fetch('/api/projects/' + PROJECT_ID + '/scenes/split/' + sceneId, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({split_description: splitDesc}),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '拆分失败');
+        }
+
+        const data = await res.json();
+        allScenes = data.scenes;
+        renderBoard();
+        showToast('✂️ 场景已拆分为：' + (allScenes.filter(s => s.summary.includes(splitDesc)).map(s => s.id).join(' 和 ')));
+    } catch (e) {
+        showToast('❌ 拆分失败：' + e.message, true);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Merge Scenes
+// ═══════════════════════════════════════════════════════════════
+function enterMergeMode() {
+    mergeMode = true;
+    mergeSelected = [];
+    document.getElementById('merge-overlay').style.display = 'flex';
+    updateMergeSelection();
+}
+
+function cancelMerge() {
+    mergeMode = false;
+    mergeSelected = [];
+    document.getElementById('merge-overlay').style.display = 'none';
+    // Remove selection visuals
+    document.querySelectorAll('.scene-card.merge-selected').forEach(c => c.classList.remove('merge-selected'));
+}
+
+function toggleMergeSelect(sceneId, card) {
+    const idx = mergeSelected.indexOf(sceneId);
+    if (idx >= 0) {
+        mergeSelected.splice(idx, 1);
+        card.classList.remove('merge-selected');
+    } else if (mergeSelected.length < 2) {
+        mergeSelected.push(sceneId);
+        card.classList.add('merge-selected');
+    } else {
+        // Replace oldest
+        const oldId = mergeSelected.shift();
+        document.querySelector('[data-scene-id="' + oldId + '"]')?.classList.remove('merge-selected');
+        mergeSelected.push(sceneId);
+        card.classList.add('merge-selected');
+    }
+    updateMergeSelection();
+}
+
+function updateMergeSelection() {
+    const container = document.getElementById('merge-selection');
+    const confirmBtn = document.getElementById('merge-confirm-btn');
+
+    if (mergeSelected.length === 0) {
+        container.innerHTML = '<span style="color:var(--fg-muted);font-size:0.9em">点击两个场景卡片进行选择</span>';
+        confirmBtn.disabled = true;
+    } else {
+        container.innerHTML = mergeSelected.map(id =>
+            '<span style="background:var(--accent);color:#fff;padding:0.3em 0.75em;border-radius:100px;font-size:0.85em">' + escapeHTML(id) + '</span>'
+        ).join(' <span style="color:var(--fg-muted)">+</span> ');
+        confirmBtn.disabled = mergeSelected.length !== 2;
+    }
+}
+
+async function confirmMerge() {
+    if (mergeSelected.length !== 2) return;
+
+    try {
+        const res = await fetch('/api/projects/' + PROJECT_ID + '/scenes/merge', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({scene_ids: mergeSelected}),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '合并失败');
+        }
+
+        const data = await res.json();
+        allScenes = data.scenes;
+        cancelMerge();
+        renderBoard();
+        showToast('🔗 场景已合并为 ' + data.merged_id);
+    } catch (e) {
+        showToast('❌ 合并失败：' + e.message, true);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Save
+// ═══════════════════════════════════════════════════════════════
+async function saveAllScenes() {
+    syncScenesFromDOM();
+
+    const saveBtn = document.getElementById('save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中...';
+
+    try {
+        const res = await fetch('/api/projects/' + PROJECT_ID + '/scenes', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                scenes: allScenes,
+                episode_summaries: episodeSummaries,
+            }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '保存失败');
+        }
+
+        const data = await res.json();
+        allScenes = data.scenes;
+        renderBoard();
+        showToast('💾 保存成功！共 ' + data.scene_count + ' 个场景');
+        flashSaveIndicator();
+    } catch (e) {
+        showToast('❌ 保存失败：' + e.message, true);
+    }
+
+    saveBtn.disabled = false;
+    saveBtn.textContent = '💾 保存修改';
+}
+
+function flashSaveIndicator() {
+    const el = document.getElementById('save-indicator');
+    el.style.display = 'inline';
+    el.style.opacity = '1';
+    setTimeout(() => {
+        el.style.transition = 'opacity 0.5s';
+        el.style.opacity = '0';
+        setTimeout(() => { el.style.display = 'none'; el.style.transition = ''; }, 500);
+    }, 1500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Auto Renumber
+// ═══════════════════════════════════════════════════════════════
+function autoRenumber() {
+    if (!confirm('重新编号将按集分组，每集内按当前顺序重新分配 sequence 和 scene ID。\n\n确定要重新编号吗？')) return;
+
+    syncScenesFromDOM();
+
+    // Group by episode
+    const groups = new Map();
+    allScenes.forEach(s => {
+        const ep = s.episode || 1;
+        if (!groups.has(ep)) groups.set(ep, []);
+        groups.get(ep).push(s);
+    });
+
+    let globalSeq = 1;
+    const numbered = [];
+    Array.from(groups.keys()).sort((a, b) => a - b).forEach(ep => {
+        groups.get(ep).forEach((s, i) => {
+            s.sequence = i + 1;
+            s.id = 'scene_' + String(globalSeq).padStart(3, '0');
+            globalSeq++;
+            numbered.push(s);
+        });
+    });
+
+    allScenes = numbered;
+    renderBoard();
+    showToast('🔢 已重新编号（记得保存）');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Stage 4
+// ═══════════════════════════════════════════════════════════════
+async function triggerStage4() {
+    // Save first
+    syncScenesFromDOM();
+    try {
+        const saveRes = await fetch('/api/projects/' + PROJECT_ID + '/scenes', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({scenes: allScenes, episode_summaries: episodeSummaries}),
+        });
+        if (!saveRes.ok) {
+            const err = await saveRes.json();
+            showToast('❌ 保存失败：' + (err.detail || '请重试'), true);
+            return;
+        }
+        const data = await saveRes.json();
+        allScenes = data.scenes;
+    } catch (e) {
+        showToast('❌ 保存失败，请检查网络', true);
+        return;
+    }
+
+    if (!confirm('场景已保存。\n\n将使用当前场景列表运行 Stage 4（逐场内容生成）。\n\n是否继续？')) return;
+
+    // Navigate back to workspace and trigger Stage 4
+    // We pass a flag so the workspace knows to auto-run Stage 4
+    window.location.href = '/projects/' + PROJECT_ID + '?auto_stage=4';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Toast
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// v3：编排导出 / 导入（通用格式）
+// ═══════════════════════════════════════════════════════════════
+function exportBoard(fmt) {
+    window.location.href = '/api/projects/' + PROJECT_ID + '/scenes/export?format=' + fmt;
+}
+
+async function importBoard(input) {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const text = await f.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (e) { showToast('❌ 文件不是合法 JSON', true); input.value = ''; return; }
+    const n = (data.scenes || []).length;
+    if (!n) { showToast('❌ 文件中没有 scenes 数组', true); input.value = ''; return; }
+    if (!confirm('导入 "' + f.name + '" 并覆盖当前编排（' + n + ' 场）？\n导入后回到工作台运行 Stage 4/5 即按新编排重新生成剧本。')) {
+        input.value = ''; return;
+    }
+    try {
+        const r = await fetch('/api/projects/' + PROJECT_ID + '/scenes/import', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)});
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+        showToast('✅ 已导入 ' + d.scene_count + ' 场编排');
+        await initKanban();
+    } catch (e) {
+        showToast('❌ 导入失败：' + e.message, true);
+    }
+    input.value = '';
+}
+
+function showToast(msg, isError) {
+    const toast = document.getElementById('kanban-toast');
+    toast.textContent = msg;
+    toast.style.background = isError ? 'var(--danger)' : 'var(--success)';
+    toast.style.color = '#fff';
+    toast.style.display = 'block';
+    toast.style.opacity = '1';
+    toast.style.zIndex = '9999';
+    clearTimeout(toast._timeout);
+    toast._timeout = setTimeout(() => {
+        toast.style.transition = 'opacity 0.3s';
+        toast.style.opacity = '0';
+        setTimeout(() => { toast.style.display = 'none'; toast.style.transition = ''; }, 300);
+    }, 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveAllScenes();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
+        e.preventDefault();
+        if (mergeMode) cancelMerge(); else enterMergeMode();
+    }
+    if (e.key === 'Escape' && mergeMode) {
+        cancelMerge();
+    }
+});
+</script>
+{% endblock %}

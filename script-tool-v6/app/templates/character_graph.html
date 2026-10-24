@@ -1,0 +1,540 @@
+{% extends "base.html" %}
+{% block title %}人物关系图谱 — {{ project.title }}{% endblock %}
+{% block content %}
+
+<div class="graph-page-header">
+    <h1>{{ project.title }} — 人物关系图谱</h1>
+    <div class="graph-nav-links">
+        <a href="/projects/{{ project.id }}" class="btn btn-secondary" style="text-decoration:none;display:inline-flex">← 返回工作台</a>
+        <span class="graph-info-badge" id="graph-status">加载中...</span>
+    </div>
+</div>
+
+<!-- Legend -->
+<div class="graph-legend" id="graph-legend" style="display:none">
+    <span class="legend-title">关系类型：</span>
+</div>
+
+<!-- SVG canvas -->
+<div class="graph-container" id="graph-container">
+    <svg id="graph-svg"></svg>
+    <div class="graph-loading" id="graph-loading">
+        <div class="loading-spinner"></div>
+        <p>正在加载人物关系...</p>
+    </div>
+    <div class="graph-empty" id="graph-empty" style="display:none">
+        <p id="graph-empty-msg"></p>
+    </div>
+</div>
+
+<!-- Character detail card (modal overlay) -->
+<div class="char-detail-overlay" id="char-detail-overlay" style="display:none">
+    <div class="char-detail-card" id="char-detail-card">
+        <button class="char-detail-close" onclick="closeCharDetail()">✕</button>
+        <div class="char-detail-content" id="char-detail-content"></div>
+    </div>
+</div>
+
+<!-- D3.js v7 — multiple CDN fallbacks -->
+<script>
+// Load D3 from best available CDN (China-friendly first)
+(function() {
+    var cdns = [
+        'https://cdn.bootcdn.net/ajax/libs/d3/7.8.5/d3.min.js',
+        'https://registry.npmmirror.com/d3/7.8.5/files/dist/d3.min.js',
+        'https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js',
+        'https://d3js.org/d3.v7.min.js'
+    ];
+    var idx = 0;
+    function tryNext() {
+        if (idx >= cdns.length) {
+            document.getElementById('graph-loading').style.display = 'none';
+            document.getElementById('graph-empty').style.display = 'block';
+            document.getElementById('graph-empty-msg').innerHTML =
+                '❌ D3.js 加载失败 — 请检查网络连接<br><small class="text-muted">CDN 均不可达，可尝试使用 VPN</small>';
+            document.getElementById('graph-status').textContent = 'CDN 加载失败';
+            return;
+        }
+        var script = document.createElement('script');
+        script.src = cdns[idx];
+        script.onload = function() { console.log('D3 loaded from:', cdns[idx]); onD3Ready(); };
+        script.onerror = function() { idx++; tryNext(); };
+        document.head.appendChild(script);
+    }
+    tryNext();
+})();
+</script>
+
+<script>
+// ── Color maps ───────────────────────────────────────────
+var REL_COLORS = {
+    "恋人": "#f472b6", "夫妻": "#f472b6", "情侣": "#f472b6",
+    "师徒": "#a78bfa", "师傅": "#a78bfa", "师父": "#a78bfa", "徒弟": "#a78bfa",
+    "仇敌": "#ef4444", "敌人": "#ef4444", "对手": "#ef4444", "情敌": "#ef4444",
+    "朋友": "#34d399", "好友": "#34d399", "同伴": "#34d399",
+    "父子": "#f59e0b", "母子": "#f59e0b", "父女": "#f59e0b", "母女": "#f59e0b",
+    "兄弟": "#f59e0b", "姐妹": "#f59e0b", "兄妹": "#f59e0b", "姐弟": "#f59e0b",
+    "亲属": "#f59e0b", "主仆": "#60a5fa", "上下级": "#60a5fa"
+};
+var DEFAULT_REL_COLOR = "#94a3b8";
+
+var ROLE_COLORS = {
+    "protagonist": "#fbbf24",
+    "antagonist": "#f87171",
+    "supporting": "#60a5fa",
+    "cameo": "#94a3b8"
+};
+var DEFAULT_ROLE_COLOR = "#94a3b8";
+
+var IMPORTANCE_RADIUS = { 4: 22, 3: 17, 2: 13, 1: 9 };
+
+function getRelColor(type) {
+    for (var key in REL_COLORS) {
+        if (type.indexOf(key) !== -1) return REL_COLORS[key];
+    }
+    return DEFAULT_REL_COLOR;
+}
+
+// ── State ────────────────────────────────────────────────
+var graphData = null;
+var simulation = null;
+var svgSel = null;
+var zoomG = null;
+
+function onD3Ready() {
+    if (typeof d3 === 'undefined') {
+        document.getElementById('graph-loading').style.display = 'none';
+        document.getElementById('graph-empty').style.display = 'block';
+        document.getElementById('graph-empty-msg').textContent = '❌ D3.js 未正确加载';
+        document.getElementById('graph-status').textContent = '加载失败';
+        return;
+    }
+    initGraph();
+}
+
+function showError(msg) {
+    console.error('[CharacterGraph]', msg);
+    document.getElementById('graph-loading').style.display = 'none';
+    document.getElementById('graph-empty').style.display = 'block';
+    document.getElementById('graph-empty-msg').innerHTML = msg;
+    document.getElementById('graph-status').textContent = '加载失败';
+}
+
+async function initGraph() {
+    try {
+        var res = await fetch('/api/projects/{{ project.id }}/character-graph');
+        if (!res.ok) {
+            showError('❌ API 请求失败 (HTTP ' + res.status + ')');
+            return;
+        }
+
+        var text = await res.text();
+        var data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            showError('❌ 数据解析失败: ' + e.message + '<br><small class="text-muted">响应: ' + text.substring(0, 200) + '</small>');
+            return;
+        }
+
+        console.log('[CharacterGraph] Loaded:', data.status,
+            (data.characters||[]).length + ' chars,',
+            (data.relationships||[]).length + ' rels');
+
+        if (data.status === 'no_data' || !data.characters || data.characters.length === 0) {
+            document.getElementById('graph-loading').style.display = 'none';
+            document.getElementById('graph-empty').style.display = 'block';
+            document.getElementById('graph-empty-msg').textContent = '📭 暂无人物关系数据';
+            document.getElementById('graph-status').textContent = '无数据';
+            return;
+        }
+
+        graphData = data;
+        document.getElementById('graph-loading').style.display = 'none';
+        document.getElementById('graph-status').textContent =
+            data.characters.length + ' 个角色 · ' + (data.relationships||[]).length + ' 条关系';
+
+        buildLegend(data.relationships || []);
+        document.getElementById('graph-legend').style.display = 'flex';
+        renderGraph(data);
+    } catch (e) {
+        console.error('[CharacterGraph]', e);
+        showError('❌ 渲染失败: ' + (e.message || e));
+    }
+}
+
+// ── Legend ───────────────────────────────────────────────
+function buildLegend(relationships) {
+    var seen = {};
+    var types = [];
+    for (var i = 0; i < relationships.length; i++) {
+        var r = relationships[i];
+        if (!seen[r.type]) {
+            seen[r.type] = true;
+            types.push({ type: r.type, color: r.color || getRelColor(r.type) });
+        }
+    }
+    var legendEl = document.getElementById('graph-legend');
+    // Remove old items (keep title)
+    var oldItems = legendEl.querySelectorAll('.legend-item');
+    for (var j = 0; j < oldItems.length; j++) { oldItems[j].remove(); }
+
+    for (var k = 0; k < types.length; k++) {
+        var t = types[k];
+        var item = document.createElement('span');
+        item.className = 'legend-item';
+        item.innerHTML = '<span class="legend-dot" style="background:' + t.color + '"></span>' + t.type;
+        legendEl.appendChild(item);
+    }
+}
+
+// ── Render D3 Force Graph ────────────────────────────────
+function renderGraph(data) {
+    var container = document.getElementById('graph-container');
+    var width = container.clientWidth || 900;
+    var height = Math.max(580, (window.innerHeight || 800) - 280);
+
+    svgSel = d3.select('#graph-svg')
+        .attr('width', width)
+        .attr('height', height)
+        .attr('viewBox', '0 0 ' + width + ' ' + height);
+
+    // Clear
+    svgSel.selectAll('*').remove();
+
+    // Defs: glow filter
+    var defs = svgSel.append('defs');
+    var filter = defs.append('filter').attr('id', 'node-glow');
+    filter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+    var feMerge = filter.append('feMerge');
+    feMerge.append('feMergeNode').attr('in', 'blur');
+    feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Zoom group
+    zoomG = svgSel.append('g');
+    svgSel.call(d3.zoom()
+        .scaleExtent([0.3, 4])
+        .on('zoom', function(event) { zoomG.attr('transform', event.transform); })
+    );
+
+    // Build nodes
+    var nodes = [];
+    for (var i = 0; i < data.characters.length; i++) {
+        var c = data.characters[i];
+        var imp = c.importance || 1;
+        nodes.push({
+            id: c.name,
+            name: c.name,
+            role: c.role || 'supporting',
+            importance: imp,
+            description: c.description || '',
+            traits: c.traits || [],
+            aliases: c.aliases || [],
+            appearance_count: c.appearance_count || 0,
+            key_quotes: c.key_quotes || [],
+            first_chapter: c.first_appearance_chapter || 1,
+            radius: IMPORTANCE_RADIUS[imp] || 9
+        });
+    }
+
+    // Node name → index map
+    var nodeMap = {};
+    for (var j = 0; j < nodes.length; j++) {
+        nodeMap[nodes[j].name] = j;
+    }
+
+    // Build links
+    var links = [];
+    for (var k = 0; k < (data.relationships || []).length; k++) {
+        var r = data.relationships[k];
+        var si = nodeMap[r.from];
+        var ti = nodeMap[r.to];
+        if (si !== undefined && ti !== undefined) {
+            links.push({
+                source: si,
+                target: ti,
+                type: r.type || '其他',
+                description: r.description || '',
+                color: r.color || getRelColor(r.type || '')
+            });
+        }
+    }
+
+    // ── Links group ──────────────────────────────────────
+    var linkG = zoomG.append('g').attr('class', 'links');
+
+    var link = linkG.selectAll('line')
+        .data(links)
+        .join('line')
+        .attr('stroke', function(d) { return d.color; })
+        .attr('stroke-width', function(d) {
+            return (d.type.indexOf('恋人') !== -1 || d.type.indexOf('夫妻') !== -1) ? 2.5 : 1.5;
+        })
+        .attr('stroke-opacity', 0.55)
+        .attr('stroke-dasharray', function(d) {
+            return (d.type.indexOf('仇敌') !== -1 || d.type.indexOf('敌人') !== -1) ? '5,3' : null;
+        })
+        .style('transition', 'stroke-opacity 0.3s');
+
+    // Link labels
+    var linkLabel = linkG.selectAll('text')
+        .data(links)
+        .join('text')
+        .text(function(d) { return d.type; })
+        .attr('font-size', '9px')
+        .attr('fill', '#a0a0b8')
+        .attr('text-anchor', 'middle')
+        .attr('dy', '-4')
+        .style('pointer-events', 'none')
+        .style('opacity', '0.7');
+
+    // ── Nodes group ──────────────────────────────────────
+    var nodeG = zoomG.append('g').attr('class', 'nodes');
+
+    var node = nodeG.selectAll('g')
+        .data(nodes)
+        .join('g')
+        .attr('class', 'graph-node')
+        .style('cursor', 'pointer')
+        .call(d3.drag()
+            .on('start', dragStarted)
+            .on('drag', dragged)
+            .on('end', dragEnded)
+        )
+        .on('click', function(event, d) {
+            event.stopPropagation();
+            showCharDetail(d);
+        })
+        .on('mouseenter', function(event, d) {
+            highlightSubgraph(d, links, node, link, linkLabel);
+        })
+        .on('mouseleave', function(event, d) {
+            unhighlightSubgraph(links, node, link, linkLabel);
+        });
+
+    // Circles
+    node.append('circle')
+        .attr('r', function(d) { return d.radius; })
+        .attr('fill', function(d) { return ROLE_COLORS[d.role] || DEFAULT_ROLE_COLOR; })
+        .attr('stroke', function(d) { return ROLE_COLORS[d.role] || DEFAULT_ROLE_COLOR; })
+        .attr('stroke-width', 2)
+        .attr('stroke-opacity', 0.5)
+        .attr('fill-opacity', 0.85)
+        .style('transition', 'fill-opacity 0.3s, stroke-opacity 0.3s');
+
+    // Labels
+    node.append('text')
+        .text(function(d) { return d.name.length > 5 ? d.name.slice(0, 5) + '…' : d.name; })
+        .attr('text-anchor', 'middle')
+        .attr('dy', function(d) { return d.radius + 14; })
+        .attr('fill', '#e8e8f0')
+        .attr('font-size', function(d) { return Math.max(9, d.radius * 0.6) + 'px'; })
+        .attr('font-weight', '500')
+        .attr('font-family', '"PingFang SC", "Microsoft YaHei", sans-serif')
+        .style('pointer-events', 'none')
+        .style('text-shadow', '0 1px 3px rgba(0,0,0,0.6)');
+
+    // ── Force simulation ─────────────────────────────────
+    simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(function(d) { return d.id; }).distance(120))
+        .force('charge', d3.forceManyBody().strength(-350))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(function(d) { return d.radius + 10; }))
+        .on('tick', function() {
+            link
+                .attr('x1', function(d) { return d.source.x; })
+                .attr('y1', function(d) { return d.source.y; })
+                .attr('x2', function(d) { return d.target.x; })
+                .attr('y2', function(d) { return d.target.y; });
+
+            linkLabel
+                .attr('x', function(d) { return (d.source.x + d.target.x) / 2; })
+                .attr('y', function(d) { return (d.source.y + d.target.y) / 2; });
+
+            node.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+        });
+
+    // Click background to close detail
+    svgSel.on('click', function() { closeCharDetail(); });
+}
+
+// ── Drag ─────────────────────────────────────────────────
+function dragStarted(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x;
+    d.fy = d.y;
+}
+function dragged(event, d) {
+    d.fx = event.x;
+    d.fy = event.y;
+}
+function dragEnded(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null;
+    d.fy = null;
+}
+
+// ── Hover highlight ──────────────────────────────────────
+function getLinkEndpoints(l) {
+    return {
+        sid: typeof l.source === 'object' ? l.source.id : l.source,
+        tid: typeof l.target === 'object' ? l.target.id : l.target
+    };
+}
+
+function highlightSubgraph(d, links, nodes, lines, labels) {
+    var connected = {};
+    connected[d.id] = true;
+    for (var i = 0; i < links.length; i++) {
+        var ep = getLinkEndpoints(links[i]);
+        if (ep.sid === d.id) connected[ep.tid] = true;
+        if (ep.tid === d.id) connected[ep.sid] = true;
+    }
+
+    nodes.selectAll('circle')
+        .attr('fill-opacity', function(n) { return connected[n.id] ? 1 : 0.15; })
+        .attr('stroke-opacity', function(n) { return connected[n.id] ? 1 : 0.1; });
+
+    nodes.selectAll('text')
+        .style('opacity', function(n) { return connected[n.id] ? 1 : 0.15; });
+
+    lines
+        .attr('stroke-opacity', function(l) {
+            var ep = getLinkEndpoints(l);
+            return (ep.sid === d.id || ep.tid === d.id) ? 1 : 0.05;
+        })
+        .attr('stroke-width', function(l) {
+            var ep = getLinkEndpoints(l);
+            return (ep.sid === d.id || ep.tid === d.id) ? 3 : 1;
+        });
+
+    labels
+        .style('opacity', function(l) {
+            var ep = getLinkEndpoints(l);
+            return (ep.sid === d.id || ep.tid === d.id) ? 1 : 0.05;
+        });
+}
+
+function unhighlightSubgraph(links, nodes, lines, labels) {
+    nodes.selectAll('circle')
+        .attr('fill-opacity', 0.85)
+        .attr('stroke-opacity', 0.5);
+
+    nodes.selectAll('text')
+        .style('opacity', 1);
+
+    lines
+        .attr('stroke-opacity', 0.55)
+        .attr('stroke-width', function(l) {
+            return (l.type.indexOf('恋人') !== -1 || l.type.indexOf('夫妻') !== -1) ? 2.5 : 1.5;
+        });
+
+    labels.style('opacity', 0.7);
+}
+
+// ── Detail card ──────────────────────────────────────────
+function showCharDetail(d) {
+    var roleLabels = {
+        'protagonist': '主角',
+        'antagonist': '反派/对手',
+        'supporting': '配角',
+        'cameo': '客串'
+    };
+    var roleColor = ROLE_COLORS[d.role] || DEFAULT_ROLE_COLOR;
+
+    var traitsHtml = '';
+    if (d.traits && d.traits.length > 0) {
+        traitsHtml = '<div class="char-detail-traits">';
+        for (var i = 0; i < d.traits.length; i++) {
+            traitsHtml += '<span class="char-trait-tag">' + d.traits[i] + '</span>';
+        }
+        traitsHtml += '</div>';
+    }
+
+    var quotesHtml = '';
+    if (d.key_quotes && d.key_quotes.length > 0) {
+        quotesHtml = '<div class="char-detail-section"><h4>💬 关键台词</h4>';
+        for (var j = 0; j < d.key_quotes.length; j++) {
+            quotesHtml += '<blockquote class="char-quote">"' + d.key_quotes[j] + '"</blockquote>';
+        }
+        quotesHtml += '</div>';
+    }
+
+    var aliasesHtml = '';
+    if (d.aliases && d.aliases.length > 0) {
+        aliasesHtml = '<span class="char-detail-aliases">别名：' + d.aliases.join('、') + '</span>';
+    }
+
+    var descHtml = d.description ? '<p class="char-detail-desc">' + d.description + '</p>' : '';
+    var nameFirst = d.name ? d.name[0] : '?';
+
+    document.getElementById('char-detail-content').innerHTML =
+        '<div class="char-detail-header">' +
+            '<div class="char-detail-avatar" style="background:' + roleColor + ';box-shadow:0 0 20px ' + roleColor + '40">' +
+                nameFirst +
+            '</div>' +
+            '<div class="char-detail-title">' +
+                '<h2>' + d.name + '</h2>' +
+                '<div class="char-detail-meta">' +
+                    '<span class="char-role-badge" style="background:' + roleColor + '22;color:' + roleColor + ';border:1px solid ' + roleColor + '44">' +
+                        (roleLabels[d.role] || d.role) +
+                    '</span>' +
+                    aliasesHtml +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+        '<div class="char-detail-body">' +
+            descHtml +
+            traitsHtml +
+            '<div class="char-detail-stats">' +
+                '<div class="char-stat">' +
+                    '<span class="char-stat-value">' + (d.appearance_count || 0) + '</span>' +
+                    '<span class="char-stat-label">出场章节</span>' +
+                '</div>' +
+                '<div class="char-stat">' +
+                    '<span class="char-stat-value">第' + (d.first_chapter || 1) + '章</span>' +
+                    '<span class="char-stat-label">首次出场</span>' +
+                '</div>' +
+                '<div class="char-stat">' +
+                    '<span class="char-stat-value">' + (d.importance || 1) + '</span>' +
+                    '<span class="char-stat-label">重要度</span>' +
+                '</div>' +
+            '</div>' +
+            quotesHtml +
+        '</div>';
+
+    document.getElementById('char-detail-overlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeCharDetail() {
+    var overlay = document.getElementById('char-detail-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+// ── Keyboard / backdrop close ────────────────────────────
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCharDetail();
+});
+document.addEventListener('DOMContentLoaded', function() {
+    var overlay = document.getElementById('char-detail-overlay');
+    if (overlay) {
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) closeCharDetail();
+        });
+    }
+});
+
+// ── Resize ───────────────────────────────────────────────
+window.addEventListener('resize', function() {
+    if (!graphData || !simulation || !svgSel) return;
+    var container = document.getElementById('graph-container');
+    var width = container.clientWidth || 900;
+    var height = Math.max(580, (window.innerHeight || 800) - 280);
+    svgSel.attr('width', width).attr('height', height);
+    simulation.force('center', d3.forceCenter(width / 2, height / 2));
+    simulation.alpha(0.3).restart();
+});
+</script>
+{% endblock %}

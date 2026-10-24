@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+{% block title %}创作工作台 — AI 剧本创作工具 v5{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:0.75em;flex-wrap:wrap">
+  <h1 style="margin:0">🎨 创作工作台</h1>
+  <a href="{{ back_url|default('/') }}" class="btn-secondary"
+     style="text-decoration:none;font-size:0.82em;padding:0.45em 0.95em">← 返回{{ back_label|default('小说工作台') }}</a>
+</div>
+<p style="color:var(--fg-secondary);margin:0.3em 0 1.1em;font-size:0.9em">
+  独立于小说流程的自由创作：图像（文生图 / 图生图）与视频（文生视频 / 图生视频首帧 / 首尾帧 / 参考生视频）。
+  所有产物存入全局素材库，可随时回看、保存，或把某段视频的末帧「用作首帧」来承接下一段、串成长视频。
+</p>
+
+<!-- 标签切换 -->
+<div style="display:flex;gap:0.5em;margin-bottom:1em">
+  <button id="tab-image" onclick="switchTab('image')">🖼 图像</button>
+  <button id="tab-video" class="btn-secondary" onclick="switchTab('video')">🎬 视频</button>
+</div>
+
+<!-- ══ 图像面板 ══ -->
+<div class="panel" id="panel-image">
+  <h2>🖼 图像生成</h2>
+  <div style="display:flex;gap:0.5em;margin-bottom:0.75em;flex-wrap:wrap">
+    <button id="im-t2i" onclick="imgMode('t2i')">文生图</button>
+    <button id="im-i2i" class="btn-secondary" onclick="imgMode('i2i')">图生图</button>
+  </div>
+  <label>提示词</label>
+  <textarea id="img-prompt" rows="4" placeholder="描述你想生成的画面，例如：黄昏海边，一位穿米色风衣的女性侧脸，电影感光影"></textarea>
+
+  <div id="img-ref-box" style="display:none;margin-top:0.75em">
+    <label>参考图（图生图 / 局部重绘）</label>
+    <input type="file" id="img-ref-input" accept="image/*" onchange="pickImgRef(this)">
+    <img id="img-ref-preview" style="display:none;max-height:180px;margin-top:0.5em;border-radius:10px;border:1px solid var(--glass-border)">
+  </div>
+
+  <div style="display:flex;gap:0.75em;flex-wrap:wrap;margin-top:0.75em">
+    <div style="flex:2;min-width:200px">
+      <label>模型</label>
+      <select id="img-model">
+        <option value="qwen-image-3.0-pro">qwen-image-3.0-pro（千问旗舰·默认）</option>
+        <option value="wan2.7-image-pro">wan2.7-image-pro（万相·4K/五官控制）</option>
+      </select>
+    </div>
+    <div style="flex:1;min-width:120px">
+      <label>尺寸</label>
+      <select id="img-size">
+        <option value="16:9">16:9 横</option>
+        <option value="1:1">1:1 方</option>
+        <option value="9:16">9:16 竖</option>
+      </select>
+    </div>
+    <div style="flex:0 0 90px">
+      <label>张数</label>
+      <input type="number" id="img-count" value="1" min="1" max="4">
+    </div>
+  </div>
+
+  <div style="margin-top:0.9em;display:flex;gap:0.6em;align-items:center;flex-wrap:wrap">
+    <button onclick="genImage()" id="img-gen-btn">✨ 生成图像</button>
+    <span id="img-msg" style="font-size:0.85em;color:var(--fg-secondary)"></span>
+  </div>
+  <div id="img-results" style="display:flex;gap:0.6em;flex-wrap:wrap;margin-top:0.9em"></div>
+</div>
+
+<!-- ══ 视频面板 ══ -->
+<div class="panel" id="panel-video" style="display:none">
+  <h2>🎬 视频生成</h2>
+  <div style="display:flex;gap:0.5em;margin-bottom:0.75em;flex-wrap:wrap">
+    <button id="vm-t2v" onclick="vidMode('t2v')">文生视频</button>
+    <button id="vm-i2v" class="btn-secondary" onclick="vidMode('i2v')">图生视频·首帧</button>
+    <button id="vm-first_last" class="btn-secondary" onclick="vidMode('first_last')">首尾帧·串长视频</button>
+    <button id="vm-r2v" class="btn-secondary" onclick="vidMode('r2v')">参考生视频·角色一致</button>
+  </div>
+
+  <label>提示词</label>
+  <textarea id="vid-prompt" rows="4" placeholder="描述视频内容、镜头运动、氛围…（参考生视频可用 [Image 1]、[Image 2] 指代下方参考图）"></textarea>
+
+  <!-- 首帧 -->
+  <div id="vid-first-box" style="display:none;margin-top:0.75em">
+    <label>首帧图片</label>
+    <div style="display:flex;gap:0.6em;flex-wrap:wrap;align-items:center">
+      <input type="file" id="vid-first-input" accept="image/*" onchange="pickFirstFrame(this)" style="flex:1;min-width:240px">
+    </div>
+    <div style="font-size:0.76em;color:var(--fg-muted);margin-top:0.3em">
+      提示：也可在下方「素材库」中点某段视频的「🔗 用作首帧」，自动抽取其末帧承接下一段。
+    </div>
+    <img id="vid-first-preview" style="display:none;max-height:170px;margin-top:0.5em;border-radius:10px;border:1px solid var(--glass-border)">
+  </div>
+
+  <!-- 尾帧 -->
+  <div id="vid-last-box" style="display:none;margin-top:0.75em">
+    <label>尾帧图片</label>
+    <input type="file" id="vid-last-input" accept="image/*" onchange="pickLastFrame(this)">
+    <img id="vid-last-preview" style="display:none;max-height:170px;margin-top:0.5em;border-radius:10px;border:1px solid var(--glass-border)">
+  </div>
+
+  <!-- 参考图 -->
+  <div id="vid-refs-box" style="display:none;margin-top:0.75em">
+    <label>参考图（1-9 张，按顺序对应 [Image 1]…[Image 9]）</label>
+    <input type="file" id="vid-ref-input" accept="image/*" multiple onchange="addRefs(this)">
+    <div id="vid-refs-preview" style="display:flex;gap:0.6em;flex-wrap:wrap;margin-top:0.6em"></div>
+  </div>
+
+  <div style="display:flex;gap:0.75em;flex-wrap:wrap;margin-top:0.75em">
+    <div style="flex:2;min-width:220px">
+      <label>模型</label>
+      <select id="vid-model" onchange="applyVidUI()"></select>
+    </div>
+    <div style="flex:0 0 120px">
+      <label>分辨率</label>
+      <select id="vid-resolution">
+        <option value="480P">480P</option>
+        <option value="720P" selected>720P</option>
+        <option value="1080P">1080P</option>
+      </select>
+    </div>
+    <div style="flex:0 0 130px" id="vid-ratio-box">
+      <label>宽高比</label>
+      <select id="vid-ratio">
+        <option value="">默认/自适应</option>
+        <option value="16:9">16:9</option>
+        <option value="9:16">9:16</option>
+        <option value="1:1">1:1</option>
+        <option value="4:3">4:3</option>
+        <option value="3:4">3:4</option>
+      </select>
+    </div>
+    <div style="flex:0 0 90px">
+      <label>时长(s)</label>
+      <input type="number" id="vid-duration" value="5" min="2" max="30">
+    </div>
+  </div>
+
+  <div style="display:flex;gap:0.75em;flex-wrap:wrap;margin-top:0.75em;align-items:flex-end">
+    <div style="flex:0 0 140px">
+      <label>seed（留空=随机）</label>
+      <input type="number" id="vid-seed" placeholder="随机">
+    </div>
+    <div style="flex:2;min-width:260px">
+      <label>字幕 / 台词（可选，烧录到视频底部；换行=多行）</label>
+      <textarea id="vid-subtitle" rows="2" placeholder="例如：你到底想怎样？&#10;〔内心〕我再也不想退缩了。"></textarea>
+    </div>
+  </div>
+
+  <div style="margin-top:0.9em;display:flex;gap:0.6em;align-items:center;flex-wrap:wrap">
+    <button onclick="genVideo()" id="vid-gen-btn">🎬 生成视频</button>
+    <span id="vid-msg" style="font-size:0.85em;color:var(--fg-secondary)"></span>
+  </div>
+</div>
+
+<!-- ══ 素材库 ══ -->
+<div class="panel" id="panel-gallery">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5em">
+    <h2 style="margin:0">📚 素材库</h2>
+    <button class="btn-secondary" style="font-size:0.8em" onclick="loadItems()">↺ 刷新</button>
+  </div>
+  <div id="gallery-msg" style="font-size:0.85em;color:var(--fg-secondary);margin-bottom:0.6em;min-height:1.2em"></div>
+  <div id="gallery" style="display:flex;gap:0.75em;flex-wrap:wrap"></div>
+</div>
+
+<!-- 图片放大 -->
+<div id="modal-img" onclick="this.style.display='none'"
+     style="display:none;position:fixed;inset:0;z-index:2500;background:rgba(0,0,0,0.86);align-items:center;justify-content:center;padding:2em">
+  <img id="modal-img-el" style="max-width:95%;max-height:95%;border-radius:10px">
+</div>
+
+<script>
+// ── 状态 ────────────────────────────────────────────────
+var IMG = { mode: 't2i', ref: '' };
+var VID = { mode: 't2v', first_frame: '', last_frame: '', refs: [] };
+// 各模式可用的模型（首项为推荐默认）
+var MODE_MODELS = {
+  t2v:        [['wan3.0-video', 'wan3.0-video（文生视频）']],
+  i2v:        [['happyhorse-1.1-i2v', 'happyhorse-1.1-i2v（推荐·单图首帧）'],
+               ['wan3.0-video', 'wan3.0-video（首帧生视频）']],
+  first_last: [['wan3.0-video', 'wan3.0-video（推荐·首尾帧串长视频）']],
+  r2v:        [['happyhorse-1.1-r2v', 'happyhorse-1.1-r2v（推荐·参考一致性）'],
+               ['wan3.0-video', 'wan3.0-video（参考生视频）']]
+};
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function zoomImg(u) {
+  document.getElementById('modal-img-el').src = u;
+  document.getElementById('modal-img').style.display = 'flex';
+}
+function setMsg(id, t, isErr) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.style.color = isErr ? '#f87171' : (t ? '#34d399' : 'var(--fg-secondary)');
+  el.textContent = t;
+}
+function imgMsg(t, e) { setMsg('img-msg', t, e); }
+function vidMsg(t, e) { setMsg('vid-msg', t, e); }
+function galleryMsg(t, e) { setMsg('gallery-msg', t, e); }
+
+function switchTab(t) {
+  document.getElementById('panel-image').style.display = (t === 'image') ? '' : 'none';
+  document.getElementById('panel-video').style.display = (t === 'video') ? '' : 'none';
+  document.getElementById('tab-image').className = (t === 'image') ? '' : 'btn-secondary';
+  document.getElementById('tab-video').className = (t === 'video') ? '' : 'btn-secondary';
+}
+
+// ── 上传：把本地图片传到工作台 images/，返回 {file,url} ──
+async function uploadOne(file) {
+  var fd = new FormData();
+  fd.append('file', file);
+  var r = await fetch('/api/workbench/upload', { method: 'POST', body: fd });
+  var d = await r.json();
+  if (!r.ok) throw new Error(d.detail || r.status);
+  return d;
+}
+
+// ── 图像 ────────────────────────────────────────────────
+function imgMode(m) {
+  IMG.mode = m;
+  document.getElementById('im-t2i').className = (m === 't2i') ? '' : 'btn-secondary';
+  document.getElementById('im-i2i').className = (m === 'i2i') ? '' : 'btn-secondary';
+  document.getElementById('img-ref-box').style.display = (m === 'i2i') ? '' : 'none';
+}
+
+async function pickImgRef(input) {
+  var f = input.files && input.files[0];
+  if (!f) return;
+  imgMsg('⏳ 上传参考图…');
+  try {
+    var d = await uploadOne(f);
+    IMG.ref = d.file;
+    var pv = document.getElementById('img-ref-preview');
+    pv.src = d.url; pv.style.display = '';
+    imgMsg('✅ 参考图已就绪');
+  } catch (e) { imgMsg('❌ ' + e, true); }
+}
+
+function setImgBusy(b) {
+  document.getElementById('img-gen-btn').disabled = b;
+}
+
+async function genImage() {
+  var prompt = document.getElementById('img-prompt').value.trim();
+  if (!prompt) { imgMsg('❌ 请填写提示词', true); return; }
+  if (IMG.mode === 'i2i' && !IMG.ref) { imgMsg('❌ 图生图需要一张参考图', true); return; }
+  var payload = {
+    mode: IMG.mode, prompt: prompt,
+    model: document.getElementById('img-model').value,
+    size: document.getElementById('img-size').value,
+    count: parseInt(document.getElementById('img-count').value, 10) || 1
+  };
+  if (IMG.mode === 'i2i') payload.ref = IMG.ref;
+  setImgBusy(true);
+  imgMsg('⏳ 正在生成图像（约 20-60 秒，请勿重复点击）…');
+  try {
+    var r = await fetch('/api/workbench/image', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    imgMsg('✅ 已生成 ' + d.count + ' 张'
+      + (d.errors && d.errors.length ? '（' + d.errors.join('；') + '）' : ''));
+    renderImgResults(d.items || []);
+    loadItems();
+  } catch (e) { imgMsg('❌ ' + e, true); }
+  finally { setImgBusy(false); }
+}
+
+function renderImgResults(items) {
+  var el = document.getElementById('img-results');
+  el.innerHTML = items.map(function (it) {
+    return '<div style="width:200px"><img src="' + it.url
+      + '" onclick="zoomImg(\'' + it.url + '\')" style="width:100%;border-radius:8px;cursor:zoom-in">'
+      + '<button class="btn-secondary" style="width:100%;margin-top:0.3em;font-size:0.72em;padding:0.22em 0.4em" '
+      + 'onclick="saveUrl(\'' + it.url + '\',\'wb_' + it.id + '.png\')">💾 保存到本地</button></div>';
+  }).join('');
+}
+
+// ── 视频 ────────────────────────────────────────────────
+function vidMode(m) {
+  VID.mode = m;
+  ['t2v', 'i2v', 'first_last', 'r2v'].forEach(function (x) {
+    var b = document.getElementById('vm-' + x);
+    if (b) b.className = (x === m) ? '' : 'btn-secondary';
+  });
+  var sel = document.getElementById('vid-model');
+  sel.innerHTML = MODE_MODELS[m].map(function (o) {
+    return '<option value="' + o[0] + '">' + o[1] + '</option>';
+  }).join('');
+  sel.value = MODE_MODELS[m][0][0];
+  applyVidUI();
+}
+
+function applyVidUI() {
+  var m = VID.mode;
+  var model = document.getElementById('vid-model').value || '';
+  document.getElementById('vid-first-box').style.display = (m === 'i2v' || m === 'first_last') ? '' : 'none';
+  document.getElementById('vid-last-box').style.display = (m === 'first_last') ? '' : 'none';
+  document.getElementById('vid-refs-box').style.display = (m === 'r2v') ? '' : 'none';
+  // i2v 模型不支持宽高比（比例随首帧）
+  document.getElementById('vid-ratio-box').style.display = /i2v$/.test(model) ? 'none' : '';
+  // 时长范围：happyhorse 3–15，wan3.0 2–30；越界值就地夹取并提示
+  var dur = document.getElementById('vid-duration');
+  var isWan3 = /^wan3/.test(model);
+  var lo = isWan3 ? 2 : 3, hi = isWan3 ? 30 : 15;
+  dur.min = lo; dur.max = hi;
+  dur.title = 'happyhorse 3–15s；wan3.0 2–30s';
+  var v = parseInt(dur.value, 10);
+  if (isNaN(v)) v = 5;
+  var cv = Math.max(lo, Math.min(hi, v));
+  if (cv !== v) {
+    vidMsg('⚠ 时长 ' + v + 's 超出 ' + model + ' 的范围（' + lo + '–' + hi + 's），已改为 ' + cv + 's', true);
+  }
+  dur.value = cv;
+}
+
+async function pickFirstFrame(input) {
+  var f = input.files && input.files[0];
+  if (!f) return;
+  vidMsg('⏳ 上传首帧…');
+  try {
+    var d = await uploadOne(f);
+    VID.first_frame = d.file;
+    var pv = document.getElementById('vid-first-preview');
+    pv.src = d.url; pv.style.display = '';
+    vidMsg('✅ 首帧已就绪');
+  } catch (e) { vidMsg('❌ ' + e, true); }
+}
+
+async function pickLastFrame(input) {
+  var f = input.files && input.files[0];
+  if (!f) return;
+  vidMsg('⏳ 上传尾帧…');
+  try {
+    var d = await uploadOne(f);
+    VID.last_frame = d.file;
+    var pv = document.getElementById('vid-last-preview');
+    pv.src = d.url; pv.style.display = '';
+    vidMsg('✅ 尾帧已就绪');
+  } catch (e) { vidMsg('❌ ' + e, true); }
+}
+
+async function addRefs(input) {
+  var fs = Array.prototype.slice.call(input.files || []);
+  if (!fs.length) return;
+  vidMsg('⏳ 上传参考图…');
+  try {
+    for (var i = 0; i < fs.length; i++) {
+      if (VID.refs.length >= 9) { vidMsg('⚠ 参考图最多 9 张', true); break; }
+      var d = await uploadOne(fs[i]);
+      VID.refs.push({ file: d.file, url: d.url });
+    }
+    renderRefs();
+    vidMsg('✅ 当前共 ' + VID.refs.length + ' 张参考图');
+  } catch (e) { vidMsg('❌ ' + e, true); }
+  input.value = '';
+}
+
+function renderRefs() {
+  var el = document.getElementById('vid-refs-preview');
+  el.innerHTML = VID.refs.map(function (r, i) {
+    return '<div style="position:relative;width:96px">'
+      + '<img src="' + r.url + '" onclick="zoomImg(\'' + r.url + '\')" '
+      + 'style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--glass-border);cursor:zoom-in">'
+      + '<button onclick="removeRef(' + i + ')" class="btn-ghost" '
+      + 'style="position:absolute;top:-8px;right:-6px;padding:0.05em 0.4em;font-size:0.75em;background:rgba(0,0,0,0.7)">✕</button>'
+      + '<div style="font-size:0.68em;color:var(--fg-muted);text-align:center">[Image ' + (i + 1) + ']</div></div>';
+  }).join('');
+}
+function removeRef(i) { VID.refs.splice(i, 1); renderRefs(); }
+
+function setVidBusy(b) { document.getElementById('vid-gen-btn').disabled = b; }
+
+async function genVideo() {
+  var prompt = document.getElementById('vid-prompt').value.trim();
+  var model = document.getElementById('vid-model').value;
+  var payload = {
+    mode: VID.mode, model: model, prompt: prompt,
+    resolution: document.getElementById('vid-resolution').value,
+    ratio: document.getElementById('vid-ratio').value || '',
+    duration: parseInt(document.getElementById('vid-duration').value, 10) || 5
+  };
+  var seedEl = document.getElementById('vid-seed');
+  if (seedEl && String(seedEl.value).trim() !== '') payload.seed = parseInt(seedEl.value, 10);
+  var subEl = document.getElementById('vid-subtitle');
+  if (subEl && subEl.value.trim()) payload.subtitle_text = subEl.value.trim();
+  if (VID.mode === 'i2v' || VID.mode === 'first_last') {
+    if (!VID.first_frame) { vidMsg('❌ 请先提供首帧图片（上传，或在素材库点「🔗 用作首帧」）', true); return; }
+    payload.first_frame = VID.first_frame;
+  }
+  if (VID.mode === 'first_last') {
+    if (!VID.last_frame) { vidMsg('❌ 首尾帧模式需要尾帧图片', true); return; }
+    payload.last_frame = VID.last_frame;
+  }
+  if (VID.mode === 'r2v') {
+    if (!VID.refs.length) { vidMsg('❌ 参考生视频至少需要 1 张参考图', true); return; }
+    payload.refs = VID.refs.map(function (r) { return r.file; });
+  }
+  if (VID.mode === 't2v' && !prompt) { vidMsg('❌ 文生视频需要提示词', true); return; }
+
+  setVidBusy(true);
+  vidMsg('⏳ 正在提交视频任务…');
+  try {
+    var r = await fetch('/api/workbench/video', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    vidMsg('✅ 已提交，视频生成约 1-5 分钟，进度每 10 秒自动刷新'
+      + (d.warning ? '（⚠ ' + d.warning + '）' : ''));
+    loadItems();
+    startWbPoll();
+  } catch (e) { vidMsg('❌ ' + e, true); }
+  finally { setVidBusy(false); }
+}
+
+// 从素材库某视频抽末帧，设为首帧（承接长视频）
+async function useVideoLastFrame(id) {
+  galleryMsg('⏳ 正在抽取该视频末帧…');
+  try {
+    var r = await fetch('/api/workbench/last-frame', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: id })
+    });
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    vidMode('i2v');
+    VID.first_frame = d.file;
+    var pv = document.getElementById('vid-first-preview');
+    pv.src = d.url; pv.style.display = '';
+    switchTab('video');
+    vidMsg('✅ 已把该视频末帧设为首帧，可继续生成下一段（承接）');
+  } catch (e) { galleryMsg('❌ ' + e, true); }
+}
+
+// ── 素材库 ──────────────────────────────────────────────
+async function saveUrl(url, name) {
+  if (window.showSaveFilePicker) {
+    try {
+      var blob = await (await fetch(url)).blob();
+      var fh = await window.showSaveFilePicker({ suggestedName: name });
+      var w = await fh.createWritable();
+      await w.write(blob); await w.close();
+      return;
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  var a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+async function delItem(id) {
+  if (!confirm('删除这个素材？（文件也会一并删除）')) return;
+  try {
+    await fetch('/api/workbench/items/' + id, { method: 'DELETE' });
+    loadItems();
+  } catch (e) { galleryMsg('❌ ' + e, true); }
+}
+
+function renderGallery(items) {
+  var el = document.getElementById('gallery');
+  if (!items || !items.length) {
+    el.innerHTML = '<div style="color:var(--fg-muted);font-size:0.85em">还没有产物。上面生成图像 / 视频后会出现在这里。</div>';
+    return;
+  }
+  el.innerHTML = items.map(function (it) {
+    var body;
+    if (it.kind === 'image') {
+      body = '<img src="' + it.url + '" onclick="zoomImg(\'' + it.url + '\')" '
+        + 'style="width:100%;border-radius:8px;cursor:zoom-in">';
+    } else if (it.status === 'DONE' && it.file) {
+      body = '<video src="' + it.url + '" controls style="width:100%;border-radius:8px"></video>';
+    } else if (it.status === 'FAILED') {
+      body = '<div style="color:#f87171;font-size:0.78em;min-height:90px">' + esc(it.error || '失败') + '</div>';
+    } else {
+      body = '<div style="color:#67e8f9;font-size:0.8em;min-height:90px;display:flex;align-items:center">⏳ '
+        + esc(it.status) + '（生成中）</div>';
+    }
+    var acts = '';
+    if (it.status === 'DONE' && it.file) {
+      var ext = it.kind === 'video' ? 'mp4' : 'png';
+      acts += '<button class="btn-secondary" style="font-size:0.7em;padding:0.2em 0.5em" onclick="saveUrl(\''
+        + it.url + '\',\'wb_' + it.id + '.' + ext + '\')">💾 保存</button>';
+    }
+    if (it.kind === 'video' && it.status === 'DONE') {
+      acts += '<button class="btn-secondary" style="font-size:0.7em;padding:0.2em 0.5em" onclick="useVideoLastFrame(\''
+        + it.id + '\')">🔗 用作首帧</button>';
+    }
+    acts += '<button class="btn-ghost" style="font-size:0.7em;padding:0.2em 0.5em" onclick="delItem(\'' + it.id + '\')">🗑</button>';
+    var tag = (it.kind === 'image' ? '🖼 ' : '🎬 ') + esc(it.mode || '') + ' · ' + esc(it.model || '');
+    return '<div style="width:236px;background:rgba(255,255,255,0.03);border:1px solid var(--glass-border);border-radius:10px;padding:0.55em">'
+      + '<div style="font-size:0.72em;color:var(--fg-muted);margin-bottom:0.35em">' + tag + '</div>'
+      + body
+      + '<div style="font-size:0.7em;color:var(--fg-secondary);margin:0.4em 0;max-height:2.8em;overflow:hidden" title="'
+      + esc(it.prompt || '') + '">' + esc(it.prompt || '（无提示词）') + '</div>'
+      + '<div style="display:flex;gap:0.3em;flex-wrap:wrap">' + acts + '</div></div>';
+  }).join('');
+}
+
+async function loadItems() {
+  try {
+    var r = await fetch('/api/workbench/items');
+    var d = await r.json();
+    renderGallery(d.items || []);
+    if ((d.items || []).some(function (x) {
+      return x.kind === 'video' && (x.status === 'PENDING' || x.status === 'RUNNING');
+    })) startWbPoll();
+  } catch (e) { /* ignore */ }
+}
+
+var WB_POLL = null;
+function stopWbPoll() { if (WB_POLL) { clearInterval(WB_POLL); WB_POLL = null; } }
+function startWbPoll() {
+  stopWbPoll();
+  WB_POLL = setInterval(async function () {
+    try {
+      var r = await fetch('/api/workbench/videos');
+      var d = await r.json();
+      renderGallery(d.items || []);
+      var active = (d.items || []).filter(function (x) {
+        return x.kind === 'video' && (x.status === 'PENDING' || x.status === 'RUNNING');
+      });
+      var done = (d.items || []).filter(function (x) { return x.kind === 'video' && x.status === 'DONE'; }).length;
+      if (active.length) galleryMsg('视频生成中… 已完成 ' + done + ' 段（每 10 秒自动刷新）');
+      if (!active.length) { stopWbPoll(); }
+    } catch (e) { /* ignore */ }
+  }, 10000);
+}
+
+// 初始化
+imgMode('t2i');
+vidMode('t2v');
+loadItems();
+</script>
+{% endblock %}

@@ -1,0 +1,2426 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} — AI 剧本创作工具 v5{% endblock %}
+{% block content %}
+<h1>{{ project.title }}</h1>
+<div class="v4-wrap">
+<div class="v4-col v4-left">
+<div class="v4-col-title">① 创作流程</div>
+<div class="panel" id="upload-panel">
+        <h2>📂 导入小说</h2>
+        <form id="upload-form" onsubmit="return false">
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-icon">📂</div>
+                <div class="drop-zone-text">拖拽多个章节文件到此处</div>
+                <div class="drop-zone-hint">或点击下方按钮一次选择多个文件（支持 .txt / .docx / .md，可勾选需要的章节）</div>
+            </div>
+            <div class="file-input-wrapper" style="margin-bottom:0.75em">
+                <input type="file" id="file-input" accept=".txt,.docx,.md" multiple style="display:none">
+                <button type="button" class="file-select-btn" onclick="document.getElementById('file-input').click()">📁 选择多个章节文件</button>
+                <span id="file-name" class="file-name-text">未选择任何文件</span>
+            </div>
+            <div id="file-list" style="margin-bottom:0.75em;max-height:200px;overflow-y:auto"></div>
+            <button type="button" id="import-btn" onclick="importSelectedFiles()" style="display:none">📥 导入勾选的章节并解析</button>
+        </form>
+        <hr>
+        <textarea name="text" id="paste-text" placeholder="或直接粘贴小说文本..." rows="8" style="width:100%"></textarea>
+        <button hx-post="/api/projects/{{ project.id }}/paste" hx-include="#paste-text" hx-target="#upload-result" style="margin-top:0.5em">🔍 解析文本</button>
+        <div id="upload-result"></div>
+    </div>
+<div class="panel" id="pipeline-panel">
+        <h2>⚡ 生成剧本</h2>
+        <div style="display:flex;gap:0.5em;margin-bottom:0.75em">
+            <button id="run-btn" onclick="runPipeline()">🚀 一键生成</button>
+            <button id="step-btn" onclick="runStepByStep()" class="btn-secondary">📋 分步生成</button>
+            <button id="report-btn" onclick="showReport()" class="btn-secondary">🩺 生成诊断</button>
+            <button id="restart-btn" onclick="restartPipeline()" class="btn-secondary" style="display:none">🔄 重新开始</button>
+        </div>
+        <div id="resume-bar" style="display:none;padding:0.75em 1em;margin-bottom:0.75em;background:rgba(34,211,238,0.1);border:1px solid rgba(34,211,238,0.25);border-radius:8px;align-items:center;justify-content:space-between">
+            <span style="color:#67e8f9;font-size:0.95em">检测到已完成 <strong id="resume-stage-label">Stage 0-2</strong>，可继续生成</span>
+            <div style="display:flex;gap:0.5em">
+                <button id="resume-btn" onclick="resumePipeline()" style="background:#06b6d4;color:#fff;border:none;padding:0.4em 1em;border-radius:6px;cursor:pointer;font-size:0.9em">▶ 继续生成</button>
+                <button onclick="restartPipeline()" style="background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);padding:0.4em 1em;border-radius:6px;cursor:pointer;font-size:0.9em">🔄 重新开始</button>
+            </div>
+        </div>
+        <div id="progress-bar-container" style="margin-bottom:0.75em;display:none">
+            <div style="display:flex;align-items:center;gap:0.75em">
+                <progress id="progress-bar" value="0" max="100" style="flex:1"></progress>
+                <span id="progress-percent">0%</span>
+                <span id="pipeline-timer" style="display:none;font-variant-numeric:tabular-nums;color:var(--accent-3);font-weight:700;font-size:0.9em;white-space:nowrap">⏱ 00:00</span>
+            </div>
+        </div>
+        <div id="completion-toast">
+            <div style="display:flex;align-items:center;gap:0.75em">
+                <span style="font-size:2em">🎉</span>
+                <div>
+                    <strong style="font-size:1.1em;color:var(--fg-primary)">剧本生成完成！</strong>
+                    <p style="margin:0.25em 0 0;color:var(--fg-secondary);font-size:0.9em">全部 6 个阶段已处理完毕 · 耗时 <span id="completion-time" style="color:var(--accent-3);font-weight:700">--</span></p>
+                    <div id="completion-warnings" style="display:none;margin-top:0.5em;padding:0.5em 0.75em;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font-size:0.8em;color:#fbbf24;max-height:120px;overflow-y:auto"></div>
+                </div>
+                <button onclick="closeCompletionToast()" class="btn-ghost" style="margin-left:0.5em">✕</button>
+            </div>
+        </div>
+        <div id="progress">
+            <div id="stage-0" class="stage">文本预处理</div>
+            <div id="stage-1" class="stage">分章节分析</div>
+            <div id="stage-2" class="stage">跨章节综合</div>
+            <div id="stage-3" class="stage">剧本结构设计 <a href="/projects/{{ project.id }}/stage3/kanban" class="stage-kanban-link" id="stage3-kanban-link" style="display:none">📋 编排场景</a></div>
+            <div id="stage-4" class="stage">逐场内容生成</div>
+            <div id="stage-5" class="stage">组装 & 校验</div>
+        </div>
+        <div id="report-view" style="display:none;margin-top:0.75em;padding:0.75em;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px"></div>
+    </div>
+<div class="panel" id="review-panel" style="display:none">
+        <h2>🔍 审查中间结果</h2>
+        <div id="review-content"></div>
+        <div class="mt-2 flex gap-1">
+            <button id="kanban-btn" onclick="openKanban()" style="display:none;background:linear-gradient(135deg,#8b5cf6,#6366f1)">📋 场景编排看板</button>
+            <button id="continue-btn" onclick="continuePipeline()" style="display:none">▶ 继续下一阶段</button>
+            <button id="skip-review-btn" onclick="skipToEnd()" class="btn-secondary" style="display:none">⏭ 跳过审查</button>
+        </div>
+    </div>
+</div>
+<div class="v4-col v4-mid">
+<div class="v4-col-title">② 查看结果</div>
+<div class="panel" id="result-panel">
+        <h2>📄 查看结果</h2>
+        <div class="flex gap-1" style="flex-wrap:wrap">
+            <a href="/projects/{{ project.id }}/script" class="btn" style="display:inline-flex;text-decoration:none">📝 查看/编辑剧本</a>
+            <button onclick="downloadPDF()" class="btn-secondary">⬇ 下载 PDF</button>
+            <button onclick="downloadYAML()" class="btn-secondary">⬇ 下载 YAML</button>
+        </div>
+    </div>
+</div>
+<div class="v4-col v4-right">
+<div class="v4-col-title">③ 影视化工作台</div>
+<div class="panel" id="media-panel">
+        <h2>🎬 影视化工作台</h2>
+        <div style="display:flex;gap:0.5em;flex-wrap:wrap;align-items:center;margin-bottom:0.75em">
+            <button onclick="mediaExtractChars()">👤 提取角色描述</button>
+            <button onclick="mediaStoryboard()" class="btn-secondary">📋 生成分镜 Prompt</button>
+            <button id="sb-stop-btn" onclick="stopStoryboard()" class="btn-secondary" style="display:none;border-color:#f87171;color:#f87171">⏹ 停止生成</button>
+            <a href="/projects/{{ project.id }}/prompts" class="btn-secondary" style="text-decoration:none;display:inline-flex;align-items:center">🎯 Prompt 中心</a>
+            <label style="display:flex;gap:0.3em;align-items:center;font-size:0.76em;color:#a0a0b8;margin:0" title="按场景逐场生成，每场目标镜头数">每场镜头
+                <input type="number" id="sb-shots-per-scene" value="4" min="1" max="10" style="width:56px;margin:0;font-size:0.85em">
+            </label>
+            <button onclick="mediaSubmitVideos()" class="btn-secondary">🎬 生成全部视频</button>
+            <button onclick="mediaRefreshVideos()" class="btn-secondary">🔄 刷新视频进度</button>
+        </div>
+        <!-- 视频生成设置：模型 / 分辨率 / 宽高比 / 时长 / 承接 / 高级 -->
+        <div style="margin-bottom:0.75em;padding:0.75em 0.85em;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px">
+            <div style="font-size:0.85em;color:#c7c7da;margin-bottom:0.5em">🎛 视频生成设置</div>
+            <div style="display:flex;gap:0.7em;flex-wrap:wrap;align-items:flex-end">
+                <div style="flex:2;min-width:240px">
+                    <label style="display:block;font-size:0.74em;color:#a0a0b8;margin:0 0 0.25em">视频模型</label>
+                    <select id="vid-model-sel" style="font-size:0.84em;margin:0" onchange="onStoryVidModel()">
+                        <option value="happyhorse-1.1-r2v">happyhorse-1.1-r2v（参考生视频·角色一致，默认）</option>
+                        <option value="happyhorse-1.1-i2v">happyhorse-1.1-i2v（图生视频·首帧）</option>
+                        <option value="wan3.0-video">wan3.0-video（文生/首尾帧·可承接串长视频）</option>
+                    </select>
+                </div>
+                <div style="flex:0 0 100px">
+                    <label style="display:block;font-size:0.74em;color:#a0a0b8;margin:0 0 0.25em">分辨率</label>
+                    <select id="vid-res-sel" style="font-size:0.84em;margin:0">
+                        <option value="480P">480P</option>
+                        <option value="720P" selected>720P</option>
+                        <option value="1080P">1080P</option>
+                    </select>
+                </div>
+                <div id="vid-ratio-wrap" style="flex:0 0 118px">
+                    <label style="display:block;font-size:0.74em;color:#a0a0b8;margin:0 0 0.25em">宽高比</label>
+                    <select id="vid-ratio-sel" style="font-size:0.84em;margin:0">
+                        <option value="">自适应/默认</option>
+                        <option value="16:9">16:9</option>
+                        <option value="9:16">9:16</option>
+                        <option value="1:1">1:1</option>
+                        <option value="4:3">4:3</option>
+                        <option value="3:4">3:4</option>
+                    </select>
+                </div>
+                <div style="flex:0 0 158px">
+                    <label style="display:block;font-size:0.74em;color:#a0a0b8;margin:0 0 0.25em">时长（秒）</label>
+                    <div style="display:flex;gap:0.4em;align-items:center">
+                        <input type="number" id="vid-dur-sel" value="5" min="3" max="15" step="1"
+                               title="happyhorse 3–15s；wan3.0 2–30s"
+                               style="width:62px;margin:0;font-size:0.84em">
+                        <label style="display:flex;gap:0.3em;align-items:center;font-size:0.75em;cursor:pointer;margin:0;color:#a0a0b8"
+                               title="勾选后每个镜头用各自的分镜时长；不勾则全部镜头统一用左侧时长">
+                            <input type="checkbox" id="vid-dur-follow" onchange="onDurFollow()" style="width:auto;margin:0">跟随分镜
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;gap:1.1em;flex-wrap:wrap;align-items:center;margin-top:0.65em">
+                <label id="vid-cont-wrap" style="display:none;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0">
+                    <input type="checkbox" id="vid-cont-chk" style="width:auto;margin:0"> 承接上一镜头末帧（串长视频）
+                </label>
+                <span id="vid-adv-wrap" style="display:none;gap:1.1em;align-items:center;flex-wrap:wrap">
+                    <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0">
+                        <input type="checkbox" id="vid-pextend-chk" checked style="width:auto;margin:0"> 智能改写（wan3.0）
+                    </label>
+                    <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0">
+                        <input type="checkbox" id="vid-audio-chk" style="width:auto;margin:0"> 输出声音（wan3.0）
+                    </label>
+                </span>
+            </div>
+            <div style="display:flex;gap:1.1em;flex-wrap:wrap;align-items:center;margin-top:0.6em">
+                <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0">
+                    <input type="checkbox" id="vid-subtitle-chk" checked style="width:auto;margin:0"> 烧录台词字幕
+                </label>
+                <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0">
+                    <input type="checkbox" id="vid-dlg-chk" checked style="width:auto;margin:0"> 台词表演提示（口型/情绪）
+                </label>
+                <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;cursor:pointer;margin:0" title="开启后把本场「场景参考图」也作为参考图（锁定场景一致）；人物参考图始终排在前面占主参考位。若某镜头人物一致性优先，可关闭此项让人物参考占满权重">
+                    <input type="checkbox" id="vid-scene-chk" checked style="width:auto;margin:0"> 注入场景参考图（锁场景）
+                </label>
+                <label style="display:flex;gap:0.4em;align-items:center;font-size:0.8em;margin:0;color:#a0a0b8">
+                    seed
+                    <input type="number" id="vid-seed" placeholder="随机" style="width:120px;margin:0;font-size:0.84em">
+                </label>
+            </div>
+            <div id="vid-opt-hint" style="margin-top:0.5em;font-size:0.75em;color:#7a7a90;line-height:1.5"></div>
+            <div style="margin-top:0.35em;font-size:0.73em;color:#6a6a82">首帧/尾帧：在下方分镜表每行「首/尾帧」列上传（首帧用于图生视频；首+尾帧配合 wan3.0-video 模型做首尾帧生视频）；参考生视频会自动用各镜头出场角色的已确认形象作参考图。台词字幕取自分镜的「台词」字段（含对白/自语/内心独白），无声视频也能“看见”对话。</div>
+        </div>
+        <input type="file" id="shot-ff-input" accept="image/*" onchange="onShotFirstFrameFile(this)" style="display:none">
+        <input type="file" id="shot-lf-input" accept="image/*" onchange="onShotLastFrameFile(this)" style="display:none">
+        <div id="media-msg" style="margin-bottom:0.5em;font-size:0.9em;color:#a0a0b8"></div>
+        <div style="display:flex;gap:0.7em;align-items:center;flex-wrap:wrap;margin-bottom:0.6em">
+            <button id="char-all-btn" onclick="genAllCharCandidates()">🎨 一键生成选中形象</button>
+            <label style="display:flex;gap:0.3em;align-items:center;font-size:0.8em;color:#a0a0b8;margin:0;cursor:pointer"
+                   title="一键勾选 / 取消勾选全部角色">
+                <input type="checkbox" id="char-sel-all" checked onchange="toggleAllChars(this.checked)" style="width:auto;margin:0">全选
+            </label>
+            <label style="display:flex;gap:0.3em;align-items:center;font-size:0.8em;color:#a0a0b8;margin:0"
+                   title="勾选后，已确认形象的角色也会重新生成一批候选">
+                <input type="checkbox" id="char-all-force" style="width:auto;margin:0">含已确认（重做）
+            </label>
+            <span id="char-all-msg" style="font-size:0.82em;color:#a0a0b8;line-height:1.4"></span>
+        </div>
+        <div id="char-cards" style="display:flex;gap:0.75em;flex-wrap:wrap;margin-bottom:0.75em"></div>
+        <div id="storyboard-view" style="margin-bottom:0.75em;overflow-x:auto"></div>
+        <div id="chain-bar" style="display:none;margin-bottom:0.6em;padding:0.55em 0.75em;background:rgba(103,232,249,0.08);border:1px solid rgba(103,232,249,0.35);border-radius:10px;font-size:0.83em;color:#c7f9ff;line-height:1.5"></div>
+        <div id="videos-view"></div>
+        <div style="margin-top:0.9em;padding-top:0.8em;border-top:1px solid rgba(255,255,255,0.08)">
+            <div style="font-size:0.92em;margin-bottom:0.45em">💾 导出 / 另存（可自选保存位置）</div>
+            <div style="font-size:0.82em;color:#a0a0b8;margin-bottom:0.3em">方式一·浏览器弹窗选择保存文件夹（推荐，Chrome/Edge）：</div>
+            <div style="display:flex;gap:0.5em;flex-wrap:wrap;margin-bottom:0.6em">
+                <button style="font-size:0.8em" onclick="exportToPickedFolder(['images'])">📁 人物图像</button>
+                <button style="font-size:0.8em" onclick="exportToPickedFolder(['script'])">📁 剧本结果</button>
+                <button style="font-size:0.8em" onclick="exportToPickedFolder(['prompts'])">📁 Prompt</button>
+                <button style="font-size:0.8em" onclick="exportToPickedFolder(['images','script','prompts'])">📁 选择文件夹导出全部</button>
+            </div>
+            <div style="font-size:0.82em;color:#a0a0b8;margin-bottom:0.3em">方式二·填写服务器目录导出：</div>
+            <div style="display:flex;gap:0.5em;flex-wrap:wrap;align-items:center;margin-bottom:0.45em">
+                <input id="export-dir" placeholder="保存目录（留空用默认）"
+                       style="flex:1;min-width:240px;box-sizing:border-box;font-size:0.85em">
+                <button class="btn-secondary" style="font-size:0.8em" onclick="loadExportInfo()">↺ 恢复默认目录</button>
+            </div>
+            <div style="display:flex;gap:0.5em;flex-wrap:wrap">
+                <button class="btn-secondary" style="font-size:0.8em" onclick="doExport(['images'])">🖼 人物图像</button>
+                <button class="btn-secondary" style="font-size:0.8em" onclick="doExport(['script'])">📄 剧本结果</button>
+                <button class="btn-secondary" style="font-size:0.8em" onclick="doExport(['prompts'])">📝 Prompt</button>
+                <button style="font-size:0.8em" onclick="doExport(['images','script','prompts'])">💾 全部导出到该目录</button>
+            </div>
+            <div id="export-msg" style="font-size:0.85em;color:#a0a0b8;margin-top:0.45em;min-height:1.2em"></div>
+        </div>
+    </div>
+</div>
+</div>
+<div class="chat-panel collapsed" id="chat-panel">
+    <div class="chat-header" onclick="toggleChat()">
+        <div class="chat-header-left">
+            <span>💬 AI 助手</span>
+            <span class="chat-toggle">▼</span>
+        </div>
+    </div>
+    <div class="chat-body">
+        <div class="chat-actions" id="chat-actions">
+            <button class="chat-action-btn" onclick="quickAction('请将以下内容翻译成英文：')">中译英</button>
+            <button class="chat-action-btn" onclick="quickAction('请将以下内容翻译成中文：')">英译中</button>
+            <button class="chat-action-btn" onclick="quickAction('请润色以下文本，使其表达更流畅：')">润色</button>
+            <button class="chat-action-btn" onclick="quickAction('请用简洁的语言总结以下内容：')">摘要</button>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+            <div class="chat-msg assistant">你好！我是 AI 助手，可以帮你翻译、润色剧本内容。有什么需要？</div>
+        </div>
+        <div class="chat-options">
+            <label>模型:
+                <select id="chat-model">
+                    <option value="qwen3.8-max">通义千问 qwen3.8-max（旗舰）</option>
+                    <option value="glm-5.2">智谱 GLM-5.2（旗舰）</option>
+                    <option value="kimi-k2.5">Kimi k2.5（旗舰）</option>
+                    <option value="claude">Claude</option>
+                    <option value="openai">GPT (OpenAI)</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="gemini">Gemini (Google)</option>
+                    <option value="local">本地模型</option>
+                </select>
+            </label>
+        </div>
+        <div class="chat-input-row">
+            <textarea id="chat-input" rows="2" placeholder="输入消息… (Shift+Enter 换行，Enter 发送)"
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+            <button class="chat-send-btn" onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+</div>
+<!-- 描述编辑弹窗 z-index 必须高于其它弹窗（pick 2100 / scene 2150 / img 2200 /
+     import 2300 / shot 2400）：它也会从"生成人物图像"(挑选候选)面板内点「编辑描述」打开，
+     只有叠在最上层才看得见、能交互；否则被下层面板挡住，表现为"点了没反应、只能退出"。 -->
+<div id="modal-desc" onclick="if(event.target===this)closeDescModal()"
+         style="display:none;position:fixed;inset:0;z-index:2500;background:rgba(0,0,0,0.72);
+                align-items:flex-start;justify-content:center;overflow-y:auto;padding:2em 1em">
+        <div style="width:min(760px,100%);background:#1b1b28;border:1px solid rgba(255,255,255,0.12);
+                    border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,0.6)">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:0.9em 1.2em;border-bottom:1px solid rgba(255,255,255,0.08)">
+                <strong id="desc-title" style="font-size:1.05em">📖 角色设定</strong>
+                <button onclick="closeDescModal()" class="btn-secondary"
+                        style="padding:0.15em 0.6em;line-height:1.4">✕</button>
+            </div>
+            <div style="padding:1.2em;display:grid;gap:0.9em">
+                <div style="display:flex;gap:0.8em;flex-wrap:wrap">
+                    <div style="flex:1;min-width:180px">
+                        <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">角色名</label>
+                        <input id="desc-name" style="width:100%;box-sizing:border-box">
+                    </div>
+                    <div style="flex:1;min-width:180px">
+                        <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">身份定位</label>
+                        <input id="desc-role" style="width:100%;box-sizing:border-box"
+                               placeholder="protagonist / antagonist / supporting">
+                    </div>
+                </div>
+                <div>
+                    <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">
+                        外貌设定（全文，可直接修改）
+                        <span id="desc-visual-len" style="color:#7a7a90"></span>
+                    </label>
+                    <textarea id="desc-visual" rows="6"
+                              style="width:100%;box-sizing:border-box;font-size:0.9em;line-height:1.6"></textarea>
+                </div>
+                <div>
+                    <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">
+                        文生图提示词（全文，改这个会直接影响生成效果）
+                        <span id="desc-prompt-len" style="color:#7a7a90"></span>
+                    </label>
+                    <textarea id="desc-prompt" rows="9"
+                              style="width:100%;box-sizing:border-box;font-size:0.9em;line-height:1.6"></textarea>
+                </div>
+                <div id="desc-msg" style="font-size:0.85em;color:#a0a0b8;min-height:1.2em"></div>
+            </div>
+            <div style="display:flex;gap:0.6em;justify-content:flex-end;
+                        padding:0.9em 1.2em;border-top:1px solid rgba(255,255,255,0.08)">
+                <button onclick="closeDescModal()" class="btn-secondary">取消</button>
+                <button onclick="saveCharDesc()" id="desc-save-btn">💾 保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ 三张候选：挑选 / 改选 / 三视图 ══ -->
+    <div id="modal-pick" onclick="if(event.target===this)closePickModal()"
+         style="display:none;position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,0.72);
+                align-items:flex-start;justify-content:center;overflow-y:auto;padding:2em 1em">
+        <div style="width:min(1000px,100%);background:#1b1b28;border:1px solid rgba(255,255,255,0.12);
+                    border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,0.6)">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:0.9em 1.2em;border-bottom:1px solid rgba(255,255,255,0.08)">
+                <strong id="pick-title" style="font-size:1.05em">🎨 挑选人物形象</strong>
+                <button onclick="closePickModal()" class="btn-secondary"
+                        style="padding:0.15em 0.6em;line-height:1.4">✕</button>
+            </div>
+            <div id="pick-body" style="padding:1.2em"></div>
+        </div>
+    </div>
+
+    <!-- ══ 导入人物形象 ══ -->
+    <div id="modal-import" onclick="if(event.target===this)closeImportModal()"
+         style="display:none;position:fixed;inset:0;z-index:2300;background:rgba(0,0,0,0.75);
+                align-items:flex-start;justify-content:center;overflow-y:auto;padding:2em 1em">
+        <div style="width:min(560px,100%);background:#1b1b28;border:1px solid rgba(255,255,255,0.12);
+                    border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,0.6)">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:0.9em 1.2em;border-bottom:1px solid rgba(255,255,255,0.08)">
+                <strong style="font-size:1.05em">📥 导入人物形象 — <span id="import-name"></span></strong>
+                <button onclick="closeImportModal()" class="btn-secondary"
+                        style="padding:0.15em 0.6em;line-height:1.4">✕</button>
+            </div>
+            <div style="padding:1.2em;display:grid;gap:0.9em">
+                <div>
+                    <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">
+                        方式一：选择本地图片文件（png / jpg / webp，≤10MB）</label>
+                    <input type="file" id="import-file" accept="image/*" onchange="importPreview(this)"
+                           style="width:100%;box-sizing:border-box;font-size:0.85em">
+                </div>
+                <div style="text-align:center;color:#7a7a90;font-size:0.8em">— 或 —</div>
+                <div>
+                    <label style="display:block;font-size:0.8em;color:#a0a0b8;margin-bottom:0.3em">
+                        方式二：粘贴公网图片链接（推荐，视频角色一致性可用）</label>
+                    <input type="text" id="import-url" placeholder="https://..."
+                           style="width:100%;box-sizing:border-box;font-size:0.85em">
+                </div>
+                <img id="import-preview" style="display:none;max-height:260px;margin:0 auto;
+                     border-radius:10px;border:1px solid rgba(255,255,255,0.12)">
+                <label style="display:flex;gap:0.5em;align-items:center;font-size:0.85em;cursor:pointer">
+                    <input type="checkbox" id="import-confirm" checked>
+                    导入后直接设为正式形象（不勾则只加入候选列表）
+                </label>
+                <div style="font-size:0.75em;color:#7a7a90;line-height:1.6">
+                    提示：设为正式形象后，旧的三视图与场景三视图会被清空（因为脸换了）。
+                    本地上传的图没有公网链接，可灵视频的角色一致性参考暂不可用；三视图不受影响。
+                </div>
+                <div id="import-msg" style="font-size:0.85em;color:#a0a0b8;min-height:1.2em"></div>
+            </div>
+            <div style="display:flex;gap:0.6em;justify-content:flex-end;
+                        padding:0.9em 1.2em;border-top:1px solid rgba(255,255,255,0.08)">
+                <button onclick="closeImportModal()" class="btn-secondary">取消</button>
+                <button onclick="doImport()">📥 确认导入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ 章节场景三视图：人物匹配 + 换造型 ══ -->
+    <div id="modal-scene" onclick="if(event.target===this)closeSceneModal()"
+         style="display:none;position:fixed;inset:0;z-index:2150;background:rgba(0,0,0,0.72);
+                align-items:flex-start;justify-content:center;overflow-y:auto;padding:2em 1em">
+        <div style="width:min(860px,100%);background:#1b1b28;border:1px solid rgba(255,255,255,0.12);
+                    border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,0.6)">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:0.9em 1.2em;border-bottom:1px solid rgba(255,255,255,0.08)">
+                <strong style="font-size:1.05em">📚 章节场景三视图 — <span id="scene-name"></span></strong>
+                <button onclick="closeSceneModal()" class="btn-secondary"
+                        style="padding:0.15em 0.6em;line-height:1.4">✕</button>
+            </div>
+            <div id="scene-body" style="padding:1.2em"></div>
+        </div>
+    </div>
+
+    <!-- ══ 图片放大查看 ══ -->
+    <div id="modal-img" onclick="this.style.display='none'"
+         style="display:none;position:fixed;inset:0;z-index:2200;background:rgba(0,0,0,0.88);
+                align-items:center;justify-content:center;padding:1.5em;cursor:zoom-out">
+        <img id="modal-img-el" style="max-width:100%;max-height:100%;border-radius:10px;
+                 box-shadow:0 12px 50px rgba(0,0,0,0.8)">
+    </div>
+
+    
+<script>
+let _nextStage = 1;
+let _stepMode = false;
+let _timerStart = null;
+let _timerInterval = null;
+
+function formatElapsed(ms) {
+    var total = Math.floor(ms / 1000);
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var s = total % 60;
+    if (h > 0) {
+        return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    }
+    return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function startTimer() {
+    _timerStart = Date.now();
+    var el = document.getElementById('pipeline-timer');
+    if (el) {
+        el.style.display = 'inline';
+        el.classList.remove('stopped');
+        el.textContent = '⏱ 00:00';
+    }
+    if (_timerInterval) clearInterval(_timerInterval);
+    _timerInterval = setInterval(function() {
+        if (_timerStart) {
+            var el2 = document.getElementById('pipeline-timer');
+            if (el2) el2.textContent = '⏱ ' + formatElapsed(Date.now() - _timerStart);
+        }
+    }, 1000);
+}
+
+function stopTimer() {
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+    var elapsed = _timerStart ? Date.now() - _timerStart : 0;
+    _timerStart = null;
+    var el = document.getElementById('pipeline-timer');
+    if (el) {
+        el.textContent = '⏱ ' + formatElapsed(elapsed);
+        el.classList.add('stopped');
+    }
+    // Update completion toast
+    var ct = document.getElementById('completion-time');
+    if (ct) ct.textContent = formatElapsed(elapsed);
+    return elapsed;
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
+    onStoryVidModel();   // 初始化视频时长范围（随默认模型）
+    try {
+        const res = await fetch('/api/projects/{{ project.id }}/text');
+        if (res.ok) {
+            const data = await res.json();
+            if (data.text) {
+                const textarea = document.querySelector('textarea[name="text"]');
+                if (textarea) textarea.value = data.text;
+            }
+        }
+    } catch(e) { /* ignore */ }
+
+    // Check pipeline status
+    try {
+        const statusRes = await fetch('/api/projects/{{ project.id }}/pipeline-status');
+        if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            let maxDone = -1;
+            for (let s = 0; s <= 5; s++) {
+                if (statusData.stages && statusData.stages[String(s)] === 'cached') {
+                    updateStage(s, 'done', '');
+                    maxDone = Math.max(maxDone, s);
+                    if (s === 3) {
+                        var link = document.getElementById('stage3-kanban-link');
+                        if (link) link.style.display = 'inline';
+                    }
+                }
+            }
+            if (maxDone >= 0) {
+                updateProgress(Math.min((maxDone + 1) * 100 / 6, 100));
+            }
+            if (statusData.is_complete) {
+                showResumeBar(null);
+                document.getElementById('restart-btn').style.display = 'inline-flex';
+                try {
+                    const r5 = await fetch('/api/projects/{{ project.id }}/stage/5');
+                    if (r5.ok) {
+                        const d5 = await r5.json();
+                        if (d5.data) showResult(d5.data.screenplay_text || d5.data.yaml_text || '');
+                    }
+                } catch(e) {}
+            } else if (maxDone >= 0) {
+                showResumeBar(maxDone);
+                document.getElementById('restart-btn').style.display = 'inline-flex';
+            }
+            if (statusData.last_error) {
+                updateStage(maxDone + 1, 'error', statusData.last_error);
+            }
+        }
+    } catch(e) { /* ignore */ }
+
+    // Auto-run from kanban return
+    {var urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('auto_stage') === '4') {
+        window.history.replaceState({}, '', '/projects/{{ project.id }}');
+        if (maxDone >= 3) {
+            _stepMode = false;
+            setButtons(true);
+            _nextStage = 4;
+            startTimer();
+            runNextStage();
+        }
+    }}
+});
+
+function showResumeBar(maxDone) {
+    var bar = document.getElementById('resume-bar');
+    if (!bar) return;
+    if (maxDone === null || maxDone === undefined) {
+        bar.style.display = 'none';
+        return;
+    }
+    var label = document.getElementById('resume-stage-label');
+    var stageNames = ['文本预处理', '分章节分析', '跨章节综合', '剧本结构设计', '逐场内容生成', '组装校验'];
+    if (label) {
+        label.textContent = 'Stage 0-' + maxDone + '（' + stageNames.slice(0, maxDone+1).join(' → ') + '）';
+    }
+    bar.style.display = 'flex';
+}
+
+function hideResumeBar() {
+    var bar = document.getElementById('resume-bar');
+    if (bar) bar.style.display = 'none';
+}
+
+async function resumePipeline() {
+    hideResumeBar();
+    document.getElementById('restart-btn').style.display = 'none';
+    // Full pipeline mode skips cached stages automatically
+    await runPipeline();
+}
+
+async function restartPipeline() {
+    if (!confirm('重新开始将清除所有已生成的缓存数据，确定要重新开始吗？')) return;
+    hideResumeBar();
+    document.getElementById('restart-btn').style.display = 'none';
+    // Clear all caches
+    try {
+        await fetch('/api/projects/{{ project.id }}/clear-cache', { method: 'POST' });
+    } catch(e) {}
+    // Reset UI
+    for (var s = 0; s <= 5; s++) {
+        updateStage(s, '', '');
+    }
+    updateProgress(0);
+    document.getElementById('progress-bar-container').style.display = 'none';
+    document.getElementById('result-panel').querySelectorAll('pre').forEach(function(el) { el.remove(); });
+    // Start fresh
+    await runPipeline();
+}
+
+// ── v2：多章节文件选择性导入 ────────────────────────────────────
+var pendingFiles = [];  // 待导入的 File 对象列表
+
+function renderFileList() {
+    var list = document.getElementById('file-list');
+    var importBtn = document.getElementById('import-btn');
+    var nameSpan = document.getElementById('file-name');
+    if (!pendingFiles.length) {
+        list.innerHTML = '';
+        importBtn.style.display = 'none';
+        nameSpan.textContent = '未选择任何文件';
+        return;
+    }
+    nameSpan.textContent = '已选择 ' + pendingFiles.length + ' 个文件';
+    list.innerHTML = pendingFiles.map(function(f, i) {
+        var kb = (f.size / 1024).toFixed(1);
+        return '<label style="display:flex;align-items:center;gap:0.5em;padding:0.3em 0.6em;background:rgba(255,255,255,0.04);border-radius:6px;margin-bottom:0.3em;cursor:pointer;color:#c8c8dc;font-size:0.9em">'
+            + '<input type="checkbox" checked data-idx="' + i + '">'
+            + '<span>📄 ' + f.name + '</span>'
+            + '<span style="color:#7a7a90;font-size:0.85em">(' + kb + ' KB)</span></label>';
+    }).join('');
+    importBtn.style.display = 'inline-block';
+}
+
+function addFiles(fileList) {
+    for (var i = 0; i < fileList.length; i++) {
+        var f = fileList[i];
+        var dup = pendingFiles.some(function(p) { return p.name === f.name && p.size === f.size; });
+        if (!dup) pendingFiles.push(f);
+    }
+    renderFileList();
+}
+
+async function importSelectedFiles() {
+    var boxes = document.querySelectorAll('#file-list input[type="checkbox"]');
+    var chosen = [];
+    boxes.forEach(function(cb) { if (cb.checked) chosen.push(pendingFiles[+cb.dataset.idx]); });
+    if (!chosen.length) { alert('请至少勾选一个章节文件'); return; }
+
+    var fd = new FormData();
+    chosen.forEach(function(f) { fd.append('files', f, f.name); });
+
+    var btn = document.getElementById('import-btn');
+    btn.disabled = true; btn.textContent = '⏳ 正在导入解析...';
+    try {
+        var resp = await fetch('/api/projects/{{ project.id }}/upload-multi', { method: 'POST', body: fd });
+        var data = await resp.json();
+        var el = document.getElementById('upload-result');
+        if (!resp.ok) {
+            el.innerHTML = '<div style="margin-top:0.75em;color:#f87171">导入失败：' + (data.detail || resp.status) + '</div>';
+            return;
+        }
+        var html = '<div style="margin-top:0.75em;padding:0.75em;border-radius:8px;background:rgba(16,185,129,0.1);color:#34d399">✅ 导入成功：'
+            + data.chapters + ' 章，共 ' + data.total_chars.toLocaleString() + ' 字（' + data.files.length + ' 个文件）</div>';
+        if (data.errors && data.errors.length) {
+            html += '<div style="margin-top:0.5em;color:#f87171;font-size:0.9em">' + data.errors.join('<br>') + '</div>';
+        }
+        el.innerHTML = html;
+    } catch (e) {
+        document.getElementById('upload-result').innerHTML =
+            '<div style="margin-top:0.75em;color:#f87171">导入失败：' + e + '</div>';
+    } finally {
+        btn.disabled = false; btn.textContent = '📥 导入勾选的章节并解析';
+    }
+}
+
+// Drag-and-drop：追加多个文件
+(function() {
+    var dropZone = document.getElementById('drop-zone');
+    var fileInput = document.getElementById('file-input');
+    if (!dropZone || !fileInput) return;
+
+    ['dragenter', 'dragover'].forEach(function(evt) {
+        dropZone.addEventListener(evt, function(e) {
+            e.preventDefault(); e.stopPropagation();
+            dropZone.classList.add('dragover');
+        });
+    });
+
+    ['dragleave', 'drop'].forEach(function(evt) {
+        dropZone.addEventListener(evt, function(e) {
+            e.preventDefault(); e.stopPropagation();
+            dropZone.classList.remove('dragover');
+        });
+    });
+
+    dropZone.addEventListener('drop', function(e) {
+        if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files);
+    });
+})();
+
+document.getElementById('file-input').addEventListener('change', function() {
+    if (this.files.length) addFiles(this.files);
+    this.value = '';  // 清空以便重复选择同一文件
+});
+
+function getText() {
+    const textarea = document.querySelector('textarea[name="text"]');
+    return textarea ? textarea.value : '';
+}
+
+function setButtons(disabled) {
+    document.getElementById('run-btn').disabled = disabled;
+    document.getElementById('step-btn').disabled = disabled;
+}
+
+function updateStage(stage, status, message) {
+    const el = document.getElementById('stage-' + stage);
+    if (el) {
+        if (message) {
+            // Preserve the kanban link for Stage 3
+            var link = el.querySelector('.stage-kanban-link');
+            el.textContent = message;
+            if (link) el.appendChild(link);
+        }
+        el.className = 'stage ' + status;
+        // Show kanban link when Stage 3 becomes done
+        if (stage === 3 && status === 'done') {
+            var kanbanLink = document.getElementById('stage3-kanban-link');
+            if (kanbanLink) kanbanLink.style.display = 'inline';
+        }
+    }
+}
+
+function updateProgress(percent) {
+    const bar = document.getElementById('progress-bar');
+    const pct = document.getElementById('progress-percent');
+    const container = document.getElementById('progress-bar-container');
+    if (container) container.style.display = 'block';
+    if (bar) bar.value = percent;
+    if (pct) pct.textContent = percent + '%';
+}
+
+function updateTimer(elapsed) {
+    const timer = document.getElementById('pipeline-timer');
+    if (timer && elapsed !== undefined) {
+        timer.style.display = 'inline';
+        timer.textContent = '⏱ ' + formatElapsed(elapsed * 1000);
+    }
+}
+
+async function streamSSE(url, onMessage) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: getText()}),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                const msg = JSON.parse(line.slice(6));
+                if (onMessage(msg) === false) return false;
+            }
+        }
+    }
+    return true;
+}
+
+async function runPipeline() {
+    setButtons(true);
+    hideResumeBar();
+    document.getElementById('restart-btn').style.display = 'none';
+    document.getElementById('review-panel').style.display = 'none';
+    startTimer();
+
+    const ok = await streamSSE('/api/projects/{{ project.id }}/run', function(msg) {
+        if (msg.percent !== undefined) updateProgress(msg.percent);
+        if (msg.elapsed !== undefined) updateTimer(msg.elapsed);
+        if (msg.message && msg.current_stage !== undefined) {
+            updateStage(msg.current_stage, msg.stage_status[msg.current_stage], msg.message);
+        }
+        if (msg.status === 'error') {
+            stopTimer();
+            var warnDiv = document.getElementById('completion-warnings');
+            if (warnDiv) {
+                warnDiv.style.display = 'block';
+                warnDiv.innerHTML = '❌ 流水线出错：' + msg.message;
+            }
+            return false;
+        }
+        if (msg.status === 'complete') {
+            updateProgress(100);
+            stopTimer();
+            if (msg.errors && msg.errors.length > 0) {
+                var warnDiv = document.getElementById('completion-warnings');
+                if (warnDiv) {
+                    warnDiv.style.display = 'block';
+                    warnDiv.innerHTML = msg.errors.map(function(e) { return '⚠ ' + e; }).join('<br>');
+                }
+            }
+            showCompletionToast();
+            if (msg.screenplay_text || msg.yaml_text) {
+                showResult(msg.screenplay_text || msg.yaml_text);
+            }
+            document.getElementById('restart-btn').style.display = 'inline-flex';
+        }
+    });
+
+    setButtons(false);
+}
+
+async function runStepByStep() {
+    setButtons(true);
+    hideResumeBar();
+    document.getElementById('restart-btn').style.display = 'none';
+    _stepMode = true;
+    _nextStage = 0;
+    document.getElementById('review-panel').style.display = 'none';
+    startTimer();
+    await runNextStage();
+}
+
+async function continuePipeline() {
+    document.getElementById('continue-btn').style.display = 'none';
+    document.getElementById('kanban-btn').style.display = 'none';
+    document.getElementById('skip-review-btn').style.display = 'none';
+    await runNextStage();
+}
+
+async function skipToEnd() {
+    _stepMode = false;
+    document.getElementById('continue-btn').style.display = 'none';
+    document.getElementById('skip-review-btn').style.display = 'none';
+    document.getElementById('review-panel').style.display = 'none';
+    setButtons(false);
+    runPipeline();
+}
+
+async function runNextStage() {
+    const stage = _nextStage;
+    updateStage(stage, 'running', '');
+    const reviewPanel = document.getElementById('review-panel');
+    reviewPanel.style.display = 'none';
+
+    const ok = await streamSSE('/api/projects/{{ project.id }}/run-stage/' + stage, function(msg) {
+        if (msg.percent !== undefined) updateProgress(msg.percent);
+        if (msg.elapsed !== undefined) updateTimer(msg.elapsed);
+        if (msg.message) {
+            updateStage(stage, 'running', msg.message);
+        }
+        if (msg.status === 'complete') {
+            updateStage(stage, 'done', '');
+            updateProgress(msg.percent || ((stage + 1) * 100 / 6));
+            _nextStage = stage + 1;
+
+            if (_stepMode && (stage === 1 || stage === 2 || stage === 3)) {
+                reviewPanel.style.display = 'block';
+                document.getElementById('continue-btn').style.display = 'inline-flex';
+                document.getElementById('skip-review-btn').style.display = 'inline-flex';
+                if (stage === 3) {
+                    document.getElementById('kanban-btn').style.display = 'inline-flex';
+                }
+                document.getElementById('review-content').innerHTML =
+                    '<div hx-get="/api/projects/{{ project.id }}/stage/' + stage + '" hx-trigger="load">Loading...</div>';
+            } else if (_nextStage <= 5) {
+                runNextStage();
+            } else {
+                stopTimer();
+                setButtons(false);
+                reviewPanel.style.display = 'none';
+                showCompletionToast();
+                fetch('/api/projects/{{ project.id }}/stage/5')
+                    .then(r => r.json())
+                    .then(d => { if (d.data) showResult(d.data.screenplay_text || d.data.yaml_text || ''); });
+            }
+        }
+        if (msg.status === 'error') {
+            updateStage(stage, 'error', msg.message);
+            setButtons(false);
+            return false;
+        }
+    });
+
+    if (!ok) {
+        setButtons(false);
+    }
+}
+
+function showCompletionToast() {
+    const toast = document.getElementById('completion-toast');
+    if (toast) {
+        toast.style.display = 'block';
+        setTimeout(function() {
+            toast.style.transition = 'opacity 0.3s';
+            toast.style.opacity = '0';
+            setTimeout(function() { toast.style.display = 'none'; toast.style.opacity = '1'; }, 300);
+        }, 3000);
+    }
+}
+
+function closeCompletionToast() {
+    const toast = document.getElementById('completion-toast');
+    if (toast) {
+        toast.style.display = 'none';
+    }
+}
+
+function showResult(text) {
+    const panel = document.getElementById('result-panel');
+    const existing = document.getElementById('script-preview');
+    if (existing) existing.remove();
+    const pre = document.createElement('pre');
+    pre.id = 'script-preview';
+    pre.textContent = text.substring(0, 5000);
+    panel.appendChild(pre);
+}
+
+function downloadPDF() {
+    window.open('/api/projects/{{ project.id }}/script.pdf', '_blank');
+}
+
+function downloadYAML() {
+    window.open('/api/projects/{{ project.id }}/script.yaml', '_blank');
+}
+
+function openKanban() {
+    window.location.href = '/projects/{{ project.id }}/stage3/kanban';
+}
+
+// AI Chat
+var _chatStreaming = false;
+
+function toggleChat() {
+    var panel = document.getElementById('chat-panel');
+    panel.classList.toggle('collapsed');
+    panel.classList.toggle('expanded');
+}
+
+function quickAction(prompt) {
+    var input = document.getElementById('chat-input');
+    input.value = prompt;
+    input.focus();
+    var panel = document.getElementById('chat-panel');
+    if (panel.classList.contains('collapsed')) {
+        toggleChat();
+    }
+}
+
+async function sendMessage() {
+    if (_chatStreaming) return;
+    var input = document.getElementById('chat-input');
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+
+    appendMsg('user', text);
+
+    _chatStreaming = true;
+    var assistantDiv = appendMsg('assistant', '');
+    var model = document.getElementById('chat-model').value;
+
+    try {
+        var res = await fetch('/api/projects/{{ project.id }}/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: text, model: model}),
+        });
+        if (!res.ok) {
+            var errText = 'HTTP ' + res.status;
+            try { var errJson = await res.json(); errText = errJson.detail || errText; } catch(e) {}
+            assistantDiv.textContent = '❌ ' + errText + '（请检查该模型的 API Key 是否在 .env 中配置）';
+            _chatStreaming = false;
+            return;
+        }
+        var reader = res.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+        var fullText = '';
+        var hasError = false;
+        while (true) {
+            var r = await reader.read();
+            if (r.done) break;
+            buffer += decoder.decode(r.value, {stream: true});
+            var lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                if (line.startsWith('data: ')) {
+                    var msg = JSON.parse(line.slice(6));
+                    if (msg.delta) {
+                        fullText += msg.delta;
+                        assistantDiv.textContent = fullText;
+                        scrollChat();
+                    }
+                    if (msg.error) {
+                        hasError = true;
+                        assistantDiv.textContent = '❌ ' + msg.error;
+                    }
+                }
+            }
+        }
+        if (!fullText && !hasError) assistantDiv.textContent = '(no response)';
+    } catch (e) {
+        assistantDiv.textContent = 'Request failed: ' + e.message;
+    }
+    _chatStreaming = false;
+}
+
+function appendMsg(role, text) {
+    var messages = document.getElementById('chat-messages');
+    var div = document.createElement('div');
+    div.className = 'chat-msg ' + role;
+    div.textContent = text;
+    messages.appendChild(div);
+    scrollChat();
+    return div;
+}
+
+function scrollChat() {
+    var messages = document.getElementById('chat-messages');
+    messages.scrollTop = messages.scrollHeight;
+}
+
+// ── v3 生成诊断报告 ─────────────────────────────────────────
+async function showReport() {
+    var el = document.getElementById('report-view');
+    el.style.display = 'block';
+    el.innerHTML = '⏳ 正在诊断...';
+    try {
+        var r = await fetch('/api/projects/{{ project.id }}/report');
+        var d = await r.json();
+        var rows = d.stages.map(function (s) {
+            var icon = s.status === 'done' ? '✅' : '⬚';
+            var st = s.status === 'done' ? '已完成' : '未运行';
+            return '<tr style="border-top:1px solid rgba(255,255,255,0.06)">'
+                + '<td style="padding:0.3em 0.5em">' + icon + ' Stage ' + s.stage + '</td>'
+                + '<td>' + s.name + '</td><td style="color:' + (s.status === 'done' ? '#34d399' : '#fbbf24') + '">' + st + '</td>'
+                + '<td style="color:#a0a0b8">' + (s.metrics || '—') + '</td></tr>';
+        }).join('');
+        el.innerHTML = '<table style="width:100%;font-size:0.85em;border-collapse:collapse">'
+            + '<tr style="color:#7a7a90"><th style="text-align:left;padding:0.2em 0.5em">阶段</th><th style="text-align:left">名称</th><th style="text-align:left">状态</th><th style="text-align:left">关键指标</th></tr>'
+            + rows + '</table>'
+            + '<div style="margin-top:0.6em;font-weight:700;color:' + (d.all_done ? '#34d399' : '#fbbf24') + '">'
+            + (d.all_done
+                ? '🎉 全部 6 个阶段已完成，剧本生成结束！可在"查看/编辑剧本"中阅读成品。'
+                : '⚠ 尚未全部完成（' + d.progress_percent + '%）。点击"🚀 一键生成"或"▶ 继续生成"补齐剩余阶段。')
+            + '</div>';
+    } catch (e) {
+        el.innerHTML = '❌ 诊断失败：' + e;
+    }
+}
+
+// ── v3 影视化工作台 ─────────────────────────────────────────
+var MEDIA_PID = '{{ project.id }}';
+
+function mediaMsg(text, isErr) {
+    var el = document.getElementById('media-msg');
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = text;
+}
+
+async function mediaExtractChars() {
+    mediaMsg('⏳ 正在提取角色视觉档案（约 30 秒）...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters', {method: 'POST'});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        renderCharCards(d.characters);
+        mediaMsg('✅ 已提取 ' + d.characters.length + ' 个角色档案，可点"生成角色图"', false);
+    } catch (e) { mediaMsg('❌ ' + e, true); }
+}
+
+// ── 角色形象：全文查看/编辑/保存 + 三张候选 + 确认 + 三视图 ──
+var MEDIA_CHARS = [];      // 当前角色数据缓存
+var MEDIA_BUSY = false;    // 生成中标志，防止重复点击
+var TA_DRAFT = '';         // 三视图提示词编辑缓存（弹窗重建后不丢）
+var SCENE_IDX = -1;        // 场景弹窗正在操作的角色下标
+var SCENE_MATRIX = [];     // 章节×角色匹配矩阵
+var SCENE_DESC_CACHE = {}; // 章节下标 -> 编辑中的造型文本
+var IMPORT_IDX = -1;       // 导入弹窗正在操作的角色下标
+var MEDIA_SHOTS = [];      // 分镜列表缓存（只读概览/生成视频的数据源）
+var SHOT_FIRST_FRAMES = {}; // 镜头号 -> 首帧图片 data-uri（图生视频/首尾帧用）
+var SHOT_LAST_FRAMES = {};  // v6：镜头号 -> 尾帧图片 data-uri（wan3.0 首尾帧生视频用）
+var DESC_IDX = -1;         // 描述弹窗正在编辑的角色下标
+var PICK_IDX = -1;         // 候选弹窗正在操作的角色下标
+var CHAR_SELECTED = {};    // 角色下标 -> 是否勾选（参与一键生成）
+var CHAR_SEL_INIT = false; // 是否已初始化勾选状态
+var CHAR_SEL_COUNT = -1;   // 上次初始化时的角色数量
+
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function imgUrl(file) {
+    return '/api/projects/' + MEDIA_PID + '/media/images/' + encodeURIComponent(file);
+}
+
+function zoomImg(u) {
+    document.getElementById('modal-img-el').src = u;
+    document.getElementById('modal-img').style.display = 'flex';
+}
+
+// ── 把人物图/三视图另存到本地：用 <a download> 触发浏览器下载（同源图片，可自定义文件名）──
+async function _fetchBlob(url) {
+    var r = await fetch(url);
+    if (!r.ok) throw new Error(url + ' -> ' + r.status);
+    return await r.blob();
+}
+
+// 优先用浏览器"另存为"对话框（可自选保存位置）；不支持或取消时回退到默认下载
+async function _triggerDownload(file, saveName) {
+    if (!file) return;
+    var url = imgUrl(file);
+    if (window.showSaveFilePicker) {
+        try {
+            var blob = await _fetchBlob(url);
+            var fh = await window.showSaveFilePicker({ suggestedName: saveName || file });
+            var w = await fh.createWritable();
+            await w.write(blob);
+            await w.close();
+            return;
+        } catch (e) {
+            if (e && e.name === 'AbortError') return;   // 用户取消
+        }
+    }
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = saveName || file;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+async function _writeBlobToDir(dirHandle, relPath, blob) {
+    var parts = relPath.split('/');
+    var name = parts.pop();
+    var cur = dirHandle;
+    for (var i = 0; i < parts.length; i++) {
+        cur = await cur.getDirectoryHandle(parts[i], { create: true });
+    }
+    var fh = await cur.getFileHandle(name, { create: true });
+    var w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+}
+
+function _safeFileName(c, idx) {
+    return String((c && c.name) || ('char' + idx)).replace(/[\\/:*?"<>|\s]+/g, '_');
+}
+
+// 下载某角色的正式人物图(kind=1)或三视图(kind=2)到本地
+function dlCharFile(idx, kind) {
+    var c = MEDIA_CHARS[idx];
+    if (!c) return;
+    var safe = _safeFileName(c, idx);
+    if (kind === 2) {
+        if (!c.turnaround_file) { alert('这个角色还没有三视图可保存'); return; }
+        _triggerDownload(c.turnaround_file, safe + '_三视图.png');
+    } else {
+        if (!c.image_file) { alert('这个角色还没有已保存的人物图'); return; }
+        _triggerDownload(c.image_file, safe + '_人物图.png');
+    }
+}
+
+// 下载候选列表里的某一张（草稿或已保存的正式形象）
+function dlCand(idx, ci) {
+    var c = MEDIA_CHARS[idx];
+    if (!c) return;
+    var k = (c.candidates || [])[ci];
+    if (!k || !k.file) return;
+    var safe = _safeFileName(c, idx);
+    var tag = (c.confirmed_index === ci) ? '_人物图' : '_候选' + (ci + 1);
+    _triggerDownload(k.file, safe + tag + '.png');
+}
+
+// ── 导出 / 另存到指定目录 ────────────────────────────────
+function exportMsg(t, isErr) {
+    var el = document.getElementById('export-msg');
+    if (!el) return;
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+async function loadExportInfo() {
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/export-info');
+        var d = await r.json();
+        document.getElementById('export-dir').value = d.default_dir || '';
+    } catch (e) { /* 忽略 */ }
+}
+
+async function doExport(items) {
+    var dir = (document.getElementById('export-dir').value || '').trim();
+    exportMsg('⏳ 正在导出到 ' + (dir || '默认目录') + ' …', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/export', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dir: dir, items: items })});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        exportMsg('✅ ' + (d.message || '导出完成')
+            + (d.errors && d.errors.length ? '（' + d.errors.join('；') + '）' : ''),
+            !!(d.errors && d.errors.length));
+    } catch (e) {
+        exportMsg('❌ 导出失败：' + e, true);
+    }
+}
+
+async function exportToPickedFolder(items) {
+    if (!window.showDirectoryPicker) {
+        exportMsg('❌ 当前浏览器不支持"选择文件夹"（请用 Chrome/Edge）；可改用下方"填写服务器目录导出"', true);
+        return;
+    }
+    var dirHandle;
+    try { dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+    catch (e) { return; }   // 用户取消
+    exportMsg('⏳ 正在导出到文件夹「' + dirHandle.name + '」...', false);
+    var written = 0, errors = [];
+    try {
+        if (items.indexOf('images') >= 0) {
+            var rc = await fetch('/api/projects/' + MEDIA_PID + '/media/characters');
+            var dc = await rc.json();
+            var chars = dc.characters || [];
+            for (var ci = 0; ci < chars.length; ci++) {
+                var c = chars[ci];
+                var pre = String(c.name || 'char').replace(/[\\/:*?"<>|\s]+/g, '_');
+                var jobs = [];
+                if (c.image_file) jobs.push([imgUrl(c.image_file), pre + '_人物图.png']);
+                if (c.turnaround_file) jobs.push([imgUrl(c.turnaround_file), pre + '_三视图.png']);
+                var stn = c.scene_turnarounds || {};
+                for (var kk in stn) {
+                    if (stn[kk] && stn[kk].file) jobs.push([imgUrl(stn[kk].file), pre + '_第' + (stn[kk].chapter_index || kk) + '章场景三视图.png']);
+                }
+                for (var j = 0; j < jobs.length; j++) {
+                    try {
+                        await _writeBlobToDir(dirHandle, '人物图像/' + jobs[j][1], await _fetchBlob(jobs[j][0]));
+                        written++;
+                    } catch (e) { errors.push(jobs[j][1] + ': ' + e); }
+                }
+            }
+        }
+        if (items.indexOf('script') >= 0) {
+            var rs = await fetch('/api/projects/' + MEDIA_PID + '/script-text');
+            if (rs.ok) {
+                var dsx = await rs.json();
+                if ((dsx.text || '').trim()) {
+                    await _writeBlobToDir(dirHandle, '剧本结果.md', new Blob([dsx.text], { type: 'text/markdown' }));
+                    written++;
+                } else errors.push('剧本结果为空');
+            } else errors.push('剧本接口不可用（请重启服务）');
+        }
+        if (items.indexOf('prompts') >= 0) {
+            var rc2 = await fetch('/api/projects/' + MEDIA_PID + '/media/characters');
+            var dc2 = await rc2.json();
+            var prompts = (dc2.characters || []).map(function (c) {
+                return { name: c.name, role: c.role, visual_description: c.visual_description, image_prompt: c.image_prompt };
+            });
+            await _writeBlobToDir(dirHandle, 'Prompt/角色提示词.json', new Blob([JSON.stringify(prompts, null, 2)], { type: 'application/json' }));
+            written++;
+            var rb = await fetch('/api/projects/' + MEDIA_PID + '/media/storyboard');
+            var db2 = await rb.json();
+            if (db2.shots && db2.shots.length) {
+                await _writeBlobToDir(dirHandle, 'Prompt/分镜Prompt.json', new Blob([JSON.stringify(db2.shots, null, 2)], { type: 'application/json' }));
+                written++;
+            }
+        }
+        exportMsg('✅ 已导出 ' + written + ' 个文件到文件夹「' + dirHandle.name + '」' + (errors.length ? '（' + errors.join('；') + '）' : ''), errors.length > 0);
+    } catch (e) {
+        exportMsg('❌ 导出失败：' + e, true);
+    }
+}
+
+window.addEventListener('load', function () {
+    if (typeof MEDIA_PID !== 'undefined' && MEDIA_PID) loadExportInfo();
+});
+
+async function mediaReloadChars() {
+    var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters');
+    var d = await r.json();
+    MEDIA_CHARS = d.characters || [];
+    renderCharCards(MEDIA_CHARS);
+    return MEDIA_CHARS;
+}
+
+function renderCharCards(chars) {
+    MEDIA_CHARS = chars || [];
+    var el = document.getElementById('char-cards');
+    // 首次渲染或角色数量变化时默认全选；之后保留用户勾选状态
+    if (!CHAR_SEL_INIT || CHAR_SEL_COUNT !== MEDIA_CHARS.length) {
+        CHAR_SELECTED = {};
+        MEDIA_CHARS.forEach(function (_, i) { CHAR_SELECTED[i] = true; });
+        CHAR_SEL_INIT = true;
+        CHAR_SEL_COUNT = MEDIA_CHARS.length;
+    }
+    if (!MEDIA_CHARS.length) { el.innerHTML = ''; syncCharSelUI(); return; }
+
+    el.innerHTML = MEDIA_CHARS.map(function (c, i) {
+        // 主图：已确认的形象
+        var main = c.image_file
+            ? '<img src="' + imgUrl(c.image_file) + '" onclick="zoomImg(this.src)" '
+              + 'style="width:100%;border-radius:8px;cursor:zoom-in;display:block" '
+              + 'title="点击放大">'
+              + '<button class="btn-secondary" style="width:100%;margin-top:0.3em;font-size:0.72em;padding:0.22em 0.4em" '
+              + 'onclick="dlCharFile(' + i + ',1)">💾 保存人物图到本地</button>'
+            : '<div style="height:150px;display:flex;align-items:center;justify-content:center;'
+              + 'background:rgba(255,255,255,0.04);border-radius:8px;color:#7a7a90;font-size:0.85em">'
+              + '未确认形象</div>';
+
+        // 确认状态
+        var nCand = (c.candidates || []).length;
+        var st = c.confirmed
+            ? '<div style="font-size:0.75em;color:#34d399;margin-top:0.35em">✅ 已确认第 '
+              + (c.confirmed_index + 1) + ' 张'
+              + (nCand > 1 ? '（可改选）' : '（仅 1 张，可再生成）') + '</div>'
+            : '<div style="font-size:0.75em;color:#fbbf24;margin-top:0.35em">⚪ 尚未确认形象</div>';
+
+        // 三视图
+        var ta = c.turnaround_file
+            ? '<div style="margin-top:0.5em"><div style="font-size:0.72em;color:#7a7a90;margin-bottom:0.2em">三视图</div>'
+              + '<img src="' + imgUrl(c.turnaround_file) + '" onclick="zoomImg(this.src)" '
+              + 'style="width:100%;border-radius:6px;cursor:zoom-in;display:block" title="点击放大">'
+              + '<button class="btn-secondary" style="width:100%;margin-top:0.3em;font-size:0.72em;padding:0.22em 0.4em" '
+              + 'onclick="dlCharFile(' + i + ',2)">💾 保存三视图到本地</button></div>'
+            : '';
+
+        var candBtn = (c.candidates && c.candidates.length)
+            ? '🎨 挑选/改选（' + c.candidates.length + '张）' : '🎨 生成 3 张候选';
+        var taBtn = c.confirmed
+            ? (c.turnaround_file ? '🧍 重做三视图' : '🧍 生成三视图') : '🧍 生成三视图（需先确认）';
+
+        return '<div style="width:186px;background:rgba(255,255,255,0.03);'
+            + 'border:1px solid ' + (CHAR_SELECTED[i] ? 'rgba(124,92,255,0.6)' : 'rgba(255,255,255,0.08)') + ';'
+            + 'border-radius:10px;padding:0.6em">'
+            + '<div style="display:flex;align-items:center;gap:0.35em;margin-bottom:0.4em">'
+            + '<input type="checkbox" class="char-sel" value="' + i + '"'
+            + (CHAR_SELECTED[i] ? ' checked' : '')
+            + ' onchange="onCharSelChange()" style="width:auto;margin:0;flex:0 0 auto" title="勾选后参与一键生成">'
+            + '<div style="font-weight:700;font-size:0.95em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">👤 ' + esc(c.name)
+            + '<span style="color:#7a7a90;font-size:0.78em;font-weight:400"> ' + esc(c.role || '') + '</span></div>'
+            + '</div>'
+            + main + st + ta
+            + '<div style="display:grid;gap:0.3em;margin-top:0.55em">'
+            + '<button style="font-size:0.78em" onclick="openDescModal(' + i + ')">📖 查看/编辑描述</button>'
+            + '<button style="font-size:0.78em" onclick="openPickModal(' + i + ')">' + candBtn + '</button>'
+            + '<button style="font-size:0.78em" class="btn-secondary" onclick="pickTurnaround(' + i + ')">' + taBtn + '</button>'
+            + '<button style="font-size:0.78em" class="btn-secondary" onclick="openSceneModal(' + i + ')">📚 章节场景三视图</button>'
+            + '</div></div>';
+    }).join('');
+    syncCharSelUI();
+}
+
+// ── 弹窗一：描述全文查看 + 编辑 + 保存 ──────────────────────
+function bindLenCounter(taid, outid) {
+    var t = document.getElementById(taid), o = document.getElementById(outid);
+    var f = function () { o.textContent = '（' + t.value.length + ' 字）'; };
+    t.oninput = f; f();
+}
+
+function openDescModal(idx) {
+    var c = MEDIA_CHARS[idx];
+    if (!c) return;
+    DESC_IDX = idx;
+    document.getElementById('desc-title').textContent = '📖 角色设定 — ' + (c.name || '未命名');
+    document.getElementById('desc-name').value = c.name || '';
+    document.getElementById('desc-role').value = c.role || '';
+    document.getElementById('desc-visual').value = c.visual_description || '';
+    document.getElementById('desc-prompt').value = c.image_prompt || '';
+    document.getElementById('desc-msg').textContent = '';
+    bindLenCounter('desc-visual', 'desc-visual-len');
+    bindLenCounter('desc-prompt', 'desc-prompt-len');
+    document.getElementById('modal-desc').style.display = 'flex';
+}
+
+function closeDescModal() {
+    document.getElementById('modal-desc').style.display = 'none';
+    DESC_IDX = -1;
+}
+
+function descMsg(t, isErr) {
+    var el = document.getElementById('desc-msg');
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+async function saveCharDesc() {
+    if (DESC_IDX < 0) return;
+    var payload = {
+        name: document.getElementById('desc-name').value,
+        role: document.getElementById('desc-role').value,
+        visual_description: document.getElementById('desc-visual').value,
+        image_prompt: document.getElementById('desc-prompt').value
+    };
+    if (!payload.name.trim()) { descMsg('❌ 角色名不能为空', true); return; }
+
+    var btn = document.getElementById('desc-save-btn');
+    btn.disabled = true;
+    descMsg('⏳ 正在保存...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/' + DESC_IDX, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        descMsg('✅ ' + (d.message || '已保存'), false);
+        // 弹窗 700ms 后会关闭，同时在外部消息区留一条持久提示
+        mediaMsg('✅ 「' + (payload.name || '角色') + '」描述已保存', false);
+        await mediaReloadChars();
+        if (PICK_IDX >= 0) renderPickBody();
+        setTimeout(closeDescModal, 700);
+    } catch (e) { descMsg('❌ 保存失败：' + e, true); }
+    btn.disabled = false;
+}
+
+// ── 弹窗二：三张候选挑选 / 改选 / 三视图 ────────────────────
+function openPickModal(idx) {
+    PICK_IDX = idx;
+    var c = MEDIA_CHARS[idx] || {};
+    document.getElementById('pick-title').textContent =
+        '🎨 人物形象 — ' + (c.name || '未命名');
+    document.getElementById('modal-pick').style.display = 'flex';
+    renderPickBody();
+    if (!c.candidates || !c.candidates.length) genCandidates();
+}
+
+function closePickModal() {
+    document.getElementById('modal-pick').style.display = 'none';
+    PICK_IDX = -1;
+}
+
+function pickMsg(t, isErr) {
+    var el = document.getElementById('pick-msg');
+    if (!el) return;
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+function setBusy(b) {
+    MEDIA_BUSY = b;
+    document.querySelectorAll('#pick-body button, #scene-body button').forEach(function (x) { x.disabled = b; });
+}
+
+var SEL_IMG_MODEL = 'qwen-image-3.0-pro';
+
+function renderPickBody() {
+    if (PICK_IDX < 0) return;
+    var c = MEDIA_CHARS[PICK_IDX];
+    if (!c) return;
+    var cands = c.candidates || [];
+
+    var candHtml = cands.length
+        ? '<div style="display:flex;gap:0.9em;flex-wrap:wrap">' + cands.map(function (k, i) {
+            var on = (c.confirmed_index === i);
+            return '<div style="width:210px;padding:0.5em;border-radius:10px;'
+                + 'border:2px solid ' + (on ? '#34d399' : 'rgba(255,255,255,0.1)') + ';'
+                + 'background:' + (on ? 'rgba(52,211,153,0.08)' : 'rgba(255,255,255,0.03)') + '">'
+                + '<div style="font-size:0.8em;margin-bottom:0.3em;color:' + (on ? '#34d399' : '#a0a0b8') + '">'
+                + (on ? '💾 已保存·正式形象' : '候选 ' + (i + 1))
+                + (k.model ? ' <span style="color:#7a7a90;font-weight:400">· ' + esc(k.model) + '</span>' : '') + '</div>'
+                + '<img src="' + imgUrl(k.file) + '" onclick="zoomImg(this.src)" '
+                + 'style="width:100%;border-radius:8px;cursor:zoom-in;display:block" title="点击放大">'
+                + '<button style="width:100%;margin-top:0.45em;font-size:0.8em" '
+                + (on ? 'disabled' : '') + ' onclick="confirmCand(' + i + ')">'
+                + (on ? '✅ 已保存' : (c.confirmed ? '💾 改选并保存' : '💾 保存这张')) + '</button>'
+                + '<button class="btn-secondary" style="width:100%;margin-top:0.3em;font-size:0.75em" '
+                + 'onclick="dlCand(' + PICK_IDX + ',' + i + ')">⬇ 下载到本地</button>'
+                + '</div>';
+          }).join('') + '</div>'
+        : '<div style="color:#a0a0b8;font-size:0.9em;padding:1em 0">'
+          + '还没有候选图。点下面的「生成 3 张候选」开始（约 1-3 分钟）。</div>';
+
+    var taHtml;
+    if (!c.confirmed) {
+        taHtml = '<div style="color:#fbbf24;font-size:0.85em">⚪ 先在上面确认一张形象，才能生成三视图。</div>';
+    } else {
+        var draft = TA_DRAFT || c.turnaround_prompt_draft || '';
+        taHtml = (c.turnaround_file
+            ? '<img src="' + imgUrl(c.turnaround_file) + '" onclick="zoomImg(this.src)" '
+              + 'style="max-width:100%;border-radius:10px;cursor:zoom-in;display:block" title="点击放大">'
+              + '<div style="font-size:0.75em;color:#7a7a90;margin:0.35em 0 0.4em">上一张三视图'
+              + (c.turnaround_model ? '（模型：' + esc(c.turnaround_model) + '）' : '') + '</div>'
+              + '<button class="btn-secondary" style="font-size:0.78em;margin-bottom:0.7em" '
+              + 'onclick="dlCharFile(PICK_IDX,2)">⬇ 下载三视图到本地</button>'
+            : '')
+          + '<div style="display:flex;gap:0.5em;flex-wrap:wrap;align-items:center">'
+          + '<button class="btn-secondary" onclick="toggleTaPrompt()">✏️ 编辑提示词</button>'
+          + '<button class="btn-secondary" onclick="aiTurnaroundPrompt()">✨ AI 生成七维度描述</button>'
+          + '<span style="font-size:0.72em;color:#7a7a90">锁脸模型：qwen-image-3.0-pro</span>'
+          + '</div>'
+          + '<textarea id="ta-prompt" rows="10" oninput="TA_DRAFT=this.value" '
+          + 'style="display:none;width:100%;box-sizing:border-box;margin-top:0.5em;'
+          + 'font-size:0.8em;line-height:1.55">' + esc(draft) + '</textarea>'
+          + '<div style="font-size:0.73em;color:#7a7a90;margin-top:0.3em">'
+          + (draft ? '已载入提示词，可直接修改；点「生成三视图」即使用上方内容。'
+                   : '留空则用默认模板；点「✨」让 AI 按脸型/发型/肤色/体型/着装/配饰/神情七个维度自动填写。')
+          + '</div>'
+          + '<div style="margin-top:0.6em">'
+          + '<button onclick="genTurnaround()">'
+          + (c.turnaround_file ? '🔄 重新生成三视图' : '🧍 生成三视图（正面 / 侧面 / 背面）')
+          + '</button></div>';
+    }
+
+    document.getElementById('pick-body').innerHTML =
+        '<div style="display:flex;gap:0.6em;flex-wrap:wrap;align-items:center;margin-bottom:0.7em">'
+        + '<select id="img-model" style="font-size:0.8em;padding:0.25em 0.4em" title="选择文生图模型">'
+        + '<option value="qwen-image-3.0-pro">模型 qwen-image-3.0-pro（千问旗舰·默认）</option>'
+        + '<option value="wan2.7-image-pro">模型 wan2.7-image-pro（万相·4K/五官控制）</option>'
+        + '</select>'
+        + '<button onclick="genCandidates()">' + (cands.length ? '🎨 再生成 3 张（保留现有草稿）' : '🎨 生成 3 张候选') + '</button>'
+        + '<button class="btn-secondary" onclick="openImportModal(' + PICK_IDX + ')">📥 导入形象</button>'
+        + '<button class="btn-secondary" onclick="openDescModal(' + PICK_IDX + ')">📖 编辑描述</button>'
+        + '<span style="font-size:0.8em;color:#7a7a90">可反复生成、草稿会累积；点「💾 保存这张」即选定为正式形象，其余草稿自动清理，已保存的形象会一直保留</span>'
+        + '</div>'
+        + '<div id="pick-msg" style="font-size:0.88em;color:#a0a0b8;min-height:1.3em;margin-bottom:0.6em"></div>'
+        + '<div style="font-size:0.85em;color:#a0a0b8;margin-bottom:0.45em">候选图（点击可放大）</div>'
+        + candHtml
+        + '<div style="margin-top:1.3em;padding-top:1em;border-top:1px solid rgba(255,255,255,0.08)">'
+        + '<div style="font-size:0.85em;color:#a0a0b8;margin-bottom:0.45em">三视图</div>'
+        + taHtml + '</div>';
+    var _ms = document.getElementById('img-model');
+    if (_ms && SEL_IMG_MODEL) _ms.value = SEL_IMG_MODEL;
+}
+
+async function genCandidates() {
+    if (PICK_IDX < 0 || MEDIA_BUSY) return;
+    setBusy(true);
+    pickMsg('⏳ 正在并发生成 3 张候选图，约 1-3 分钟，请勿关闭弹窗...', false);
+    try {
+        var modelSel = document.getElementById('img-model');
+        SEL_IMG_MODEL = modelSel ? modelSel.value : SEL_IMG_MODEL;
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + PICK_IDX + '/candidates', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: SEL_IMG_MODEL })});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        await mediaReloadChars();
+        renderPickBody();
+        pickMsg('✅ 新生成 ' + d.count + ' 张候选' + (d.total ? '（当前共 ' + d.total + ' 张草稿）' : '') + (d.errors && d.errors.length
+            ? '（部分失败：' + d.errors.join(' | ') + '）' : '') + '，挑一张点「选这张」', 
+            !!(d.errors && d.errors.length));
+    } catch (e) {
+        renderPickBody();
+        pickMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+// ── 角色勾选：一键全选 / 只生成选中的角色 ──
+function selectedCharIndexes() {
+    return Object.keys(CHAR_SELECTED).filter(function (k) {
+        return CHAR_SELECTED[k];
+    }).map(function (k) { return parseInt(k, 10); }).sort(function (a, b) { return a - b; });
+}
+
+function onCharSelChange() {
+    document.querySelectorAll('.char-sel').forEach(function (x) {
+        CHAR_SELECTED[parseInt(x.value, 10)] = x.checked;
+    });
+    renderCharCards(MEDIA_CHARS);   // 重绘以同步卡片边框高亮与全选框状态
+}
+
+function toggleAllChars(on) {
+    (MEDIA_CHARS || []).forEach(function (_, i) { CHAR_SELECTED[i] = !!on; });
+    renderCharCards(MEDIA_CHARS);
+}
+
+function syncCharSelUI() {
+    var n = selectedCharIndexes().length;
+    var total = (MEDIA_CHARS || []).length;
+    var all = document.getElementById('char-sel-all');
+    if (all) {
+        all.checked = total > 0 && n === total;
+        all.indeterminate = n > 0 && n < total;
+    }
+    var btn = document.getElementById('char-all-btn');
+    if (btn) btn.textContent = '🎨 一键生成选中形象' + (n ? '（' + n + '）' : '');
+}
+
+// ── 一键生成勾选的角色形象（后端异步并发，最多 10 张同时生成）──
+function charAllMsg(t, isErr) {
+    var el = document.getElementById('char-all-msg');
+    if (!el) return;
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+async function genAllCharCandidates() {
+    var btn = document.getElementById('char-all-btn');
+    if (!btn || btn.disabled) return;
+    var force = !!(document.getElementById('char-all-force') || {}).checked;
+    if (!MEDIA_CHARS || !MEDIA_CHARS.length) {
+        charAllMsg('❌ 还没有角色档案：请先点「提取角色描述」', true);
+        return;
+    }
+    var idxs = selectedCharIndexes();
+    if (!idxs.length) {
+        charAllMsg('❌ 请先在角色卡片上勾选要生成的角色（可点「全选」）', true);
+        return;
+    }
+    var pending = idxs.filter(function (i) { return force || !MEDIA_CHARS[i].confirmed; });
+    if (!pending.length) {
+        charAllMsg('✅ 选中的角色都已有确认形象；要重做请勾选「含已确认」', false);
+        return;
+    }
+    if (!confirm('将为选中的 ' + pending.length + ' 个角色各生成 3 张候选（共 ' + (pending.length * 3)
+        + ' 张，最多 10 张同时生成），继续？')) return;
+
+    btn.disabled = true;
+    charAllMsg('⏳ 正在并发生成选中的 ' + pending.length + ' 个角色，最多 10 张同时生成，请稍候...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/candidates-all', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ indexes: idxs, force: force, count: 3, model: SEL_IMG_MODEL })});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        await mediaReloadChars();
+        var ok = (d.generated || []).filter(function (g) { return g.count > 0; });
+        var errs = [];
+        (d.generated || []).forEach(function (g) {
+            (g.errors || []).forEach(function (e) { errs.push(g.name + '：' + e); });
+        });
+        var msg = '✅ 已为 ' + ok.length + ' 个角色生成 ' + (d.total_images || 0) + ' 张候选'
+            + (ok.length ? '（' + ok.map(function (g) { return g.name + ' ' + g.count + '张'; }).join('、') + '）' : '')
+            + (errs.length ? '；部分失败：' + errs.join(' | ') : '')
+            + '。点角色卡片的「挑选/改选」即可确认形象';
+        charAllMsg(msg, errs.length > 0);
+    } catch (e) {
+        charAllMsg('❌ ' + e, true);
+    }
+    btn.disabled = false;
+}
+
+async function confirmCand(ci) {
+    if (PICK_IDX < 0 || MEDIA_BUSY) return;
+    setBusy(true);
+    pickMsg('⏳ 正在确认...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + PICK_IDX + '/confirm', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ index: ci })});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        await mediaReloadChars();
+        renderPickBody();
+        pickMsg('✅ ' + (d.message || '已确认') + '，现在可以生成三视图了', false);
+    } catch (e) {
+        renderPickBody();
+        pickMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+async function genTurnaround() {
+    if (PICK_IDX < 0 || MEDIA_BUSY) return;
+    var payload = {};
+    if (TA_DRAFT && TA_DRAFT.trim()) payload.prompt = TA_DRAFT.trim();
+    setBusy(true);
+    pickMsg('⏳ 正在用参考图锁脸生成三视图（约 1-3 分钟）...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + PICK_IDX + '/turnaround', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        await mediaReloadChars();
+        renderPickBody();
+        pickMsg('✅ 三视图已生成（模型 ' + (d.model || '') + '，点击图片可放大）', false);
+    } catch (e) {
+        renderPickBody();
+        pickMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+function toggleTaPrompt() {
+    var t = document.getElementById('ta-prompt');
+    if (!t) return;
+    t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+    if (t.style.display === 'block') t.focus();
+}
+
+async function aiTurnaroundPrompt() {
+    if (PICK_IDX < 0 || MEDIA_BUSY) return;
+    setBusy(true);
+    pickMsg('⏳ AI 正在按脸型/发型/肤色/体型/着装等七个维度撰写外观描述...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + PICK_IDX + '/turnaround-prompt', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        TA_DRAFT = d.prompt || '';
+        await mediaReloadChars();
+        renderPickBody();
+        var t = document.getElementById('ta-prompt');
+        if (t) { t.style.display = 'block'; t.value = TA_DRAFT; }
+        pickMsg('✅ ' + (d.message || '已生成，可继续修改'), false);
+    } catch (e) {
+        renderPickBody();
+        pickMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+function pickTurnaround(idx) {
+    var c = MEDIA_CHARS[idx];
+    if (!c) return;
+    if (!c.confirmed) {
+        mediaMsg('⚠ 「' + c.name + '」还没确认形象，已为你打开挑选窗口', true);
+        openPickModal(idx);
+        return;
+    }
+    openPickModal(idx);
+    if (!c.turnaround_file) setTimeout(genTurnaround, 250);
+}
+
+// 旧接口保留：卡片上的单图生成入口
+async function mediaGenImage(idx) {
+    openPickModal(idx);
+}
+
+// ── 章节场景三视图：人物匹配 + 按章换造型 ────────────
+function sceneMsg(t, isErr) {
+    var el = document.getElementById('scene-msg');
+    if (!el) return;
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+function openSceneModal(idx) {
+    SCENE_IDX = idx;
+    SCENE_DESC_CACHE = {};
+    var c = MEDIA_CHARS[idx] || {};
+    document.getElementById('scene-name').textContent = c.name || '';
+    document.getElementById('modal-scene').style.display = 'flex';
+    loadSceneMatch();
+}
+
+function closeSceneModal() {
+    document.getElementById('modal-scene').style.display = 'none';
+    SCENE_IDX = -1;
+}
+
+async function loadSceneMatch() {
+    if (SCENE_IDX < 0) return;
+    sceneMsg('⏳ 正在扫描章节原文匹配出场...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/scene-match');
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        SCENE_MATRIX = d.matrix || [];
+        var me = (d.characters || []).filter(function (x) { return x.idx === SCENE_IDX; })[0];
+        if (me && MEDIA_CHARS[SCENE_IDX]) {
+            MEDIA_CHARS[SCENE_IDX].scene_turnarounds = me.scene_turnarounds || {};
+            MEDIA_CHARS[SCENE_IDX].confirmed = me.confirmed;
+        }
+        renderSceneBody();
+        var total = SCENE_MATRIX.filter(function (row) {
+            return row.matches.some(function (m) { return m.idx === SCENE_IDX; });
+        }).length;
+        sceneMsg('✅ 匹配完成：该角色在 ' + total + ' 章中出场', false);
+    } catch (e) {
+        renderSceneBody();
+        sceneMsg('❌ ' + e, true);
+    }
+}
+
+function renderSceneBody() {
+    if (SCENE_IDX < 0) return;
+    var c = MEDIA_CHARS[SCENE_IDX] || {};
+    var st = c.scene_turnarounds || {};
+
+    var rows = (SCENE_MATRIX || []).map(function (row) {
+        var m = null;
+        for (var k = 0; k < row.matches.length; k++) {
+            if (row.matches[k].idx === SCENE_IDX) m = row.matches[k];
+        }
+        if (!m) return '';
+        var ci = row.chapter_index;
+        var entry = st[String(ci)] || {};
+        var desc = (SCENE_DESC_CACHE[ci] != null) ? SCENE_DESC_CACHE[ci] : (entry.scene_desc || '');
+        var img = entry.file
+            ? '<img src="' + imgUrl(entry.file) + '" onclick="zoomImg(this.src)" '
+              + 'style="max-width:100%;border-radius:8px;cursor:zoom-in;display:block;margin-top:0.5em" title="点击放大">'
+            : '';
+        var summary = (desc && !entry.file)
+            ? '<div style="font-size:0.76em;color:#a0a0b8;margin-top:0.4em">'
+              + esc(desc.slice(0, 90)) + (desc.length > 90 ? '…' : '') + '</div>'
+            : '';
+        return '<div style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;'
+            + 'padding:0.7em;margin-bottom:0.7em;background:rgba(255,255,255,0.02)">'
+            + '<div style="display:flex;justify-content:space-between;gap:0.6em;flex-wrap:wrap;align-items:center">'
+            + '<strong style="font-size:0.9em">第' + ci + '章 '
+            + '<span style="color:#7a7a90;font-weight:400">' + esc(row.title) + '</span></strong>'
+            + '<span style="font-size:0.78em;color:#67e8f9">出场 ' + m.count + ' 次</span></div>'
+            + '<div style="display:flex;gap:0.4em;flex-wrap:wrap;margin-top:0.5em">'
+            + '<button class="btn-secondary" style="font-size:0.78em" onclick="extractSceneDesc(' + ci + ')">✨ 提取本章造型</button>'
+            + '<button class="btn-secondary" style="font-size:0.78em" onclick="toggleSceneDesc(' + ci + ')">✏️ 编辑造型</button>'
+            + '<button style="font-size:0.78em" onclick="genSceneTurnaround(' + ci + ')">'
+            + (entry.file ? '🔄 重生成三视图' : '🧍 生成场景三视图') + '</button></div>'
+            + '<textarea id="sd-' + ci + '" rows="4" oninput="SCENE_DESC_CACHE[' + ci + ']=this.value" '
+            + 'style="display:none;width:100%;box-sizing:border-box;margin-top:0.45em;'
+            + 'font-size:0.8em;line-height:1.5">' + esc(desc) + '</textarea>'
+            + summary + img + '</div>';
+    }).join('');
+
+    if (!rows) {
+        rows = '<div style="color:#fbbf24;font-size:0.88em">该角色在所有章节原文中都没有匹配到名字。</div>';
+    }
+
+    document.getElementById('scene-body').innerHTML =
+        '<div style="display:flex;gap:0.6em;align-items:center;flex-wrap:wrap;margin-bottom:0.7em">'
+        + '<button class="btn-secondary" onclick="loadSceneMatch()">🔍 重新匹配章节</button>'
+        + '<span style="font-size:0.78em;color:#7a7a90">按角色名在每章原文中匹配，只列出出场章节；'
+        + '生成时人脸锁定已确认形象，仅换本章服装与状态</span></div>'
+        + '<div id="scene-msg" style="font-size:0.86em;color:#a0a0b8;min-height:1.2em;margin-bottom:0.6em"></div>'
+        + rows;
+}
+
+function toggleSceneDesc(ci) {
+    var t = document.getElementById('sd-' + ci);
+    if (!t) return;
+    t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+    if (t.style.display === 'block') t.focus();
+}
+
+async function extractSceneDesc(ci) {
+    if (SCENE_IDX < 0 || MEDIA_BUSY) return;
+    setBusy(true);
+    sceneMsg('⏳ AI 正在阅读本章提取造型（约 20-40 秒）...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + SCENE_IDX + '/scene-desc', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chapter_index: ci })});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        SCENE_DESC_CACHE[ci] = d.scene_desc || '';
+        renderSceneBody();
+        var t = document.getElementById('sd-' + ci);
+        if (t) t.style.display = 'block';
+        sceneMsg('✅ ' + (d.message || '已提取，可编辑后生成'), false);
+    } catch (e) {
+        renderSceneBody();
+        sceneMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+// ── 导入人物形象 ────────────────────────────────
+function importMsg(t, isErr) {
+    var el = document.getElementById('import-msg');
+    if (!el) return;
+    el.style.color = isErr ? '#f87171' : '#34d399';
+    el.textContent = t;
+}
+
+function openImportModal(idx) {
+    IMPORT_IDX = idx;
+    var c = MEDIA_CHARS[idx] || {};
+    document.getElementById('import-name').textContent = c.name || '';
+    document.getElementById('import-file').value = '';
+    document.getElementById('import-url').value = '';
+    document.getElementById('import-preview').style.display = 'none';
+    document.getElementById('import-confirm').checked = true;
+    importMsg('', false);
+    document.getElementById('modal-import').style.display = 'flex';
+}
+
+function closeImportModal() {
+    document.getElementById('modal-import').style.display = 'none';
+    IMPORT_IDX = -1;
+}
+
+function importPreview(el) {
+    var f = el.files && el.files[0];
+    var img = document.getElementById('import-preview');
+    if (!f) { img.style.display = 'none'; return; }
+    if (f.size > 10 * 1024 * 1024) {
+        importMsg('❌ 文件超过 10MB 上限（' + Math.round(f.size / 1024 / 1024) + 'MB）', true);
+        el.value = '';
+        img.style.display = 'none';
+        return;
+    }
+    var rd = new FileReader();
+    rd.onload = function () {
+        img.src = rd.result;
+        img.style.display = 'block';
+    };
+    rd.readAsDataURL(f);
+    importMsg('已选择：' + f.name + '（' + Math.round(f.size / 1024) + 'KB）', false);
+}
+
+async function doImport() {
+    if (IMPORT_IDX < 0 || MEDIA_BUSY) return;
+    var fi = document.getElementById('import-file');
+    var uv = document.getElementById('import-url').value.trim();
+    if (!fi.files.length && !uv) {
+        importMsg('❌ 请选择图片文件，或粘贴公网图片链接', true);
+        return;
+    }
+    var fd = new FormData();
+    if (fi.files.length) fd.append('file', fi.files[0]);
+    if (uv) fd.append('url', uv);
+    fd.append('as_confirmed', document.getElementById('import-confirm').checked ? 'true' : 'false');
+
+    MEDIA_BUSY = true;
+    importMsg('⏳ 正在导入...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + IMPORT_IDX + '/import-image', { method: 'POST', body: fd });
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        await mediaReloadChars();
+        if (PICK_IDX === IMPORT_IDX) renderPickBody();
+        renderCharCards(MEDIA_CHARS);
+        closeImportModal();
+        mediaMsg('✅ ' + (d.message || '形象已导入'), false);
+        if (d.warning) setTimeout(function () { mediaMsg('⚠ ' + d.warning, true); }, 1600);
+    } catch (e) {
+        importMsg('❌ ' + e, true);
+    }
+    MEDIA_BUSY = false;
+}
+
+async function genSceneTurnaround(ci) {
+    if (SCENE_IDX < 0 || MEDIA_BUSY) return;
+    var c = MEDIA_CHARS[SCENE_IDX] || {};
+    if (!c.confirmed) {
+        sceneMsg('⚠ 请先在「挑选/改选」里确认一张形象，再来生成场景三视图', true);
+        return;
+    }
+    var payload = { chapter_index: ci };
+    var desc = SCENE_DESC_CACHE[ci];
+    if (desc != null && desc.trim()) payload.scene_desc = desc.trim();
+    setBusy(true);
+    sceneMsg('⏳ 正在按本章造型生成三视图（约 15-60 秒）...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/characters/'
+            + SCENE_IDX + '/scene-turnaround', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        if (d.character) MEDIA_CHARS[SCENE_IDX] = d.character;
+        renderSceneBody();
+        sceneMsg('✅ ' + (d.message || '已生成') + '（模型 ' + (d.model || '') + '，点击图可放大）', false);
+    } catch (e) {
+        renderSceneBody();
+        sceneMsg('❌ ' + e, true);
+    }
+    setBusy(false);
+}
+
+var SB_ABORT = null;   // v6：生成分镜的中断控制器（供「⏹ 停止生成」按钮用）
+function stopSbBtn(show) {
+    var b = document.getElementById('sb-stop-btn');
+    if (b) b.style.display = show ? '' : 'none';
+}
+function stopStoryboard() {
+    if (SB_ABORT) { SB_ABORT.abort(); }
+}
+async function mediaStoryboard() {
+    var spsEl = document.getElementById('sb-shots-per-scene');
+    var sps = spsEl ? (parseInt(spsEl.value, 10) || 4) : 4;
+    mediaMsg('⏳ 正在按场景逐场生成分镜 Prompt（每场约 ' + sps + ' 个镜头；已在 Prompt 中心确认的镜头会自动保留、不覆盖）...', false);
+    var ctrl = new AbortController();
+    SB_ABORT = ctrl;
+    stopSbBtn(true);
+    var timer = setTimeout(function () { ctrl.abort(); }, 600000);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/storyboard',
+                            {method: 'POST', headers: {'Content-Type': 'application/json'},
+                             body: JSON.stringify({ shots_per_scene: sps }), signal: ctrl.signal});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        renderStoryboard(d.shots);
+        mediaMsg('✅ 已生成 ' + d.shots.length + ' 个分镜 Prompt'
+            + (d.scene_count ? '（覆盖 ' + d.scene_count + ' 场戏）' : '')
+            + (d.protected ? '；已保留 ' + d.protected + ' 个已确认镜头未覆盖' : ''), false);
+    } catch (e) {
+        if (e && e.name === 'AbortError') {
+            mediaMsg('⏹ 已停止生成（已确认的镜头不受影响；可调整「每场镜头」数后重试）', true);
+        } else {
+            mediaMsg('❌ ' + e, true);
+        }
+    } finally {
+        clearTimeout(timer);
+        SB_ABORT = null;
+        stopSbBtn(false);
+    }
+}
+
+// ── 视频状态：镜头号 → 视频记录，供分镜表状态列实时显示 ──
+var VIDEO_BY_NUM = {};
+var CHAIN_STATE = {};
+var VIDEO_STATUS_MAP = {
+    QUEUED:  ['⏳ 排队', '#fbbf24'],
+    PENDING: ['☁️ 云端排队', '#67e8f9'],
+    RUNNING: ['🎬 生成中', '#67e8f9'],
+    DONE:    ['✅ 已完成', '#34d399'],
+    FAILED:  ['❌ 失败', '#f87171']
+};
+
+function shotStatusHtml(num) {
+    var v = VIDEO_BY_NUM[num];
+    if (!v || !v.status) return '<span style="color:#55556a">—</span>';
+    var st = VIDEO_STATUS_MAP[v.status] || [(v.status || '未知'), '#a0a0b8'];
+    var tip = [v.error || '', (v.model || ''), (v.chain ? '连续生成' : '')]
+        .filter(function (x) { return x; }).join(' · ');
+    return '<span style="color:' + st[1] + ';font-size:0.86em;white-space:nowrap"'
+        + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + st[0] + '</span>';
+}
+
+// 只刷新状态列，不重建整个分镜表（轮询时避免勾选丢失、滚动跳动）
+function refreshShotStatusCells() {
+    Object.keys(VIDEO_BY_NUM).forEach(function (num) {
+        var td = document.getElementById('shot-st-' + num);
+        if (td) td.innerHTML = shotStatusHtml(parseInt(num, 10));
+    });
+}
+
+function renderStoryboard(shots) {
+    MEDIA_SHOTS = shots || [];
+    var el = document.getElementById('storyboard-view');
+    if (!MEDIA_SHOTS.length) { el.innerHTML = ''; return; }
+    var cell = 'max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    el.innerHTML =
+        '<div style="display:flex;gap:0.5em;flex-wrap:wrap;align-items:center;margin-bottom:0.6em">'
+        + '<label style="display:flex;gap:0.3em;align-items:center;font-size:0.78em;cursor:pointer"><input type="checkbox" id="chk-all" onchange="toggleAllShots(this.checked)">全选</label>'
+        + '<button style="font-size:0.78em" onclick="mediaSubmitSelectedVideos()">🎬 生成所选镜头视频</button>'
+        + '<button style="font-size:0.78em;border-color:#67e8f9;color:#67e8f9" onclick="chainVideos()" title="第1镜完成→抽尾帧→作第2镜首帧→依次串行，全自动跑完">🔗 一键连续生成（尾帧接首帧）</button>'
+        + '<a href="/projects/' + MEDIA_PID + '/prompts" class="btn-secondary" style="font-size:0.78em;text-decoration:none;display:inline-flex;align-items:center">🎯 去 Prompt 中心编辑</a>'
+        + '<span style="font-size:0.75em;color:#7a7a90">共 ' + MEDIA_SHOTS.length
+        + ' 个镜头（只读概览）；勾选后点「生成所选镜头视频」批量并行，或点「一键连续生成」自动串成连贯长视频（不勾选＝全部镜头）</span></div>'
+        + '<div style="overflow-x:auto"><table style="width:100%;font-size:0.82em;border-collapse:collapse">'
+        + '<tr style="color:#7a7a90"><th style="width:2.2em"></th><th style="text-align:left;padding:0.3em">#</th><th style="text-align:left">景别/运镜</th><th style="text-align:left">画面</th><th style="text-align:left">视频 Prompt</th><th>时长</th><th>状态</th><th>首/尾帧</th><th></th></tr>'
+        + MEDIA_SHOTS.map(function (s, i) {
+            return '<tr style="border-top:1px solid rgba(255,255,255,0.06)"><td style="padding:0.3em;text-align:center"><input type="checkbox" class="shot-chk" value="' + s.shot_number + '"></td><td style="padding:0.3em">' + s.shot_number + (s.confirmed ? ' <span title="已在 Prompt 中心确认" style="color:#34d399">✅</span>' : '')
+                + '</td><td style="' + cell + '">' + esc(s.shot_size || '') + ' ' + esc(s.camera_angle || '')
+                + '</td><td style="' + cell + '" title="' + esc(s.frame_description || '') + '">' + esc(s.frame_description || '')
+                + '</td><td style="color:#a0a0b8;' + cell + '" title="' + esc(s.video_prompt || '') + '">' + esc(s.video_prompt || '')
+                + '</td><td>' + (s.duration_seconds || 5) + 's</td>'
+                + '<td id="shot-st-' + s.shot_number + '" style="text-align:center;white-space:nowrap">' + shotStatusHtml(s.shot_number) + '</td>'
+                + '<td style="text-align:center;white-space:nowrap">' + ffCell(s.shot_number) + '</td>'
+                + '<td><a href="/projects/' + MEDIA_PID + '/prompts" class="btn-secondary" style="font-size:0.72em;padding:0.15em 0.5em;text-decoration:none">🎯 编辑</a></td></tr>';
+        }).join('') + '</table></div>';
+}
+
+// 根据所选视频模型切换「承接」选项与说明
+function onStoryVidModel() {
+    var sel = document.getElementById('vid-model-sel');
+    if (!sel) return;
+    var m = sel.value;
+    var isI2V = (m === 'happyhorse-1.1-i2v');
+    var isWan3 = (m.indexOf('wan3') === 0);
+    var isR2V = (m === 'happyhorse-1.1-r2v');
+    // 承接：仅首帧类模型（i2v / wan3.0）
+    var canCont = (isI2V || isWan3);
+    var cwrap = document.getElementById('vid-cont-wrap');
+    cwrap.style.display = canCont ? 'flex' : 'none';
+    if (!canCont) document.getElementById('vid-cont-chk').checked = false;
+    // 宽高比：i2v 比例随首帧，不支持
+    document.getElementById('vid-ratio-wrap').style.display = isI2V ? 'none' : '';
+    // 高级（智能改写/声音）：仅 wan3.0
+    document.getElementById('vid-adv-wrap').style.display = isWan3 ? 'inline-flex' : 'none';
+    // 时长范围：happyhorse 3–15，wan3.0 2–30；越界值就地夹取并提示
+    var dur = document.getElementById('vid-dur-sel');
+    if (dur) {
+        var lo = isWan3 ? 2 : 3, hi = isWan3 ? 30 : 15;
+        dur.min = lo; dur.max = hi;
+        var v = parseInt(dur.value, 10);
+        if (isNaN(v)) v = 5;
+        var cv = Math.max(lo, Math.min(hi, v));
+        if (cv !== v) {
+            mediaMsg('⚠ 时长 ' + v + 's 超出 ' + m + ' 的范围（' + lo + '–' + hi + 's），已改为 ' + cv + 's', false);
+        }
+        dur.value = cv;
+    }
+    // 说明
+    var hint = document.getElementById('vid-opt-hint');
+    if (isR2V) {
+        hint.textContent = '参考生视频：自动用各镜头「出场角色」的已确认形象作参考图（最多9张），保持角色一致性；无需首帧。';
+    } else if (isI2V) {
+        hint.textContent = '图生视频：每镜头需首帧——点分镜表「＋首帧」上传，或勾「承接上一镜头末帧」串长视频；比例随首帧，无需选宽高比。';
+    } else {
+        hint.textContent = 'wan3.0-video：无首帧=纯文生视频；有首帧=首帧/首尾帧；勾「承接上一镜头末帧」串长视频；可选智能改写与声音。';
+    }
+}
+
+// 时长「跟随分镜」开关
+function onDurFollow() {
+    document.getElementById('vid-dur-sel').disabled = document.getElementById('vid-dur-follow').checked;
+}
+
+// ── 分镜表「首帧」列：缩略图 / 上传 / 清除 ──
+function ffCell(num) {
+    var ff = SHOT_FIRST_FRAMES[num], lf = SHOT_LAST_FRAMES[num];
+    var img = 'width:30px;height:30px;object-fit:cover;border-radius:4px;cursor:zoom-in;vertical-align:middle';
+    var first = ff
+        ? '<img src="' + ff + '" onclick="zoomImg(this.src)" style="' + img + '" title="首帧">'
+          + '<button class="btn-ghost" style="font-size:0.6em;padding:0.02em 0.28em" title="清除首帧" onclick="clearShotFirstFrameNum(' + num + ')">✕</button>'
+        : '<button class="btn-secondary" style="font-size:0.64em;padding:0.1em 0.34em" title="上传首帧" onclick="pickShotFirstFrame(' + num + ')">＋首</button>';
+    var last = lf
+        ? '<img src="' + lf + '" onclick="zoomImg(this.src)" style="' + img + ';margin-left:0.25em" title="尾帧">'
+          + '<button class="btn-ghost" style="font-size:0.6em;padding:0.02em 0.28em" title="清除尾帧" onclick="clearShotLastFrameNum(' + num + ')">✕</button>'
+        : '<button class="btn-secondary" style="font-size:0.64em;padding:0.1em 0.34em;margin-left:0.25em" title="上传尾帧（wan3.0 首尾帧生视频用）" onclick="pickShotLastFrame(' + num + ')">＋尾</button>';
+    return first + last;
+}
+
+var FF_TARGET = null;
+function pickShotFirstFrame(num) {
+    FF_TARGET = num;
+    var inp = document.getElementById('shot-ff-input');
+    inp.value = '';
+    inp.click();
+}
+function onShotFirstFrameFile(input) {
+    var f = input.files && input.files[0];
+    if (!f || FF_TARGET == null) return;
+    if (f.size > 12 * 1024 * 1024) { mediaMsg('❌ 首帧图片过大（上限约 12MB）', true); return; }
+    var num = FF_TARGET;
+    var reader = new FileReader();
+    reader.onload = function () {
+        SHOT_FIRST_FRAMES[num] = reader.result;
+        renderStoryboard(MEDIA_SHOTS);
+        mediaMsg('✅ 已设置镜头 #' + num + ' 的首帧（提交视频时生效）', false);
+    };
+    reader.readAsDataURL(f);
+}
+function clearShotFirstFrameNum(num) {
+    delete SHOT_FIRST_FRAMES[num];
+    renderStoryboard(MEDIA_SHOTS);
+}
+
+// ── v6：分镜表「尾帧」：上传 / 清除（wan3.0 首尾帧生视频用）──
+var LF_TARGET = null;
+function pickShotLastFrame(num) {
+    LF_TARGET = num;
+    var inp = document.getElementById('shot-lf-input');
+    inp.value = '';
+    inp.click();
+}
+function onShotLastFrameFile(input) {
+    var f = input.files && input.files[0];
+    if (!f || LF_TARGET == null) return;
+    if (f.size > 12 * 1024 * 1024) { mediaMsg('❌ 尾帧图片过大（上限约 12MB）', true); return; }
+    var num = LF_TARGET;
+    var reader = new FileReader();
+    reader.onload = function () {
+        SHOT_LAST_FRAMES[num] = reader.result;
+        renderStoryboard(MEDIA_SHOTS);
+        mediaMsg('✅ 已设置镜头 #' + num + ' 的尾帧（选 wan3.0-video 模型时首尾帧生视频生效）', false);
+    };
+    reader.readAsDataURL(f);
+}
+function clearShotLastFrameNum(num) {
+    delete SHOT_LAST_FRAMES[num];
+    renderStoryboard(MEDIA_SHOTS);
+}
+
+// 组装视频提交参数（批量并行生成与一键连续生成共用）
+function buildVideoPayload(numbers, force) {
+    var payload = (numbers && numbers.length) ? { shot_numbers: numbers } : {};
+    if (force) payload.force = true;   // 强制重做已完成镜头（否则会被后端静默跳过）
+    // 模型 / 分辨率
+    var msel = document.getElementById('vid-model-sel');
+    if (msel) payload.model = msel.value;
+    var rsel = document.getElementById('vid-res-sel');
+    if (rsel) payload.resolution = rsel.value;
+    // 宽高比（i2v 不支持，隐藏时不发）
+    var ratioWrap = document.getElementById('vid-ratio-wrap');
+    var ratioSel = document.getElementById('vid-ratio-sel');
+    if (ratioSel && ratioWrap && ratioWrap.style.display !== 'none' && ratioSel.value) payload.ratio = ratioSel.value;
+    // 时长：未勾「跟随分镜」时用自定义值
+    var durFollow = document.getElementById('vid-dur-follow');
+    var durSel = document.getElementById('vid-dur-sel');
+    if (durFollow && !durFollow.checked && durSel) payload.duration = parseInt(durSel.value, 10) || 5;
+    // 高级（仅 wan3.0 面板可见时）：智能改写 / 声音
+    var advWrap = document.getElementById('vid-adv-wrap');
+    if (advWrap && advWrap.style.display !== 'none') {
+        var pe = document.getElementById('vid-pextend-chk');
+        var au = document.getElementById('vid-audio-chk');
+        if (pe) payload.prompt_extend = pe.checked;
+        if (au) payload.audio = au.checked;
+    }
+    // 台词字幕 / 台词表演 / seed
+    var subChk = document.getElementById('vid-subtitle-chk');
+    if (subChk) payload.subtitle = subChk.checked;
+    var dlgChk = document.getElementById('vid-dlg-chk');
+    if (dlgChk) payload.dialogue_prompt = dlgChk.checked;
+    var sceneChk = document.getElementById('vid-scene-chk');
+    if (sceneChk) payload.scene_ref = sceneChk.checked;
+    var seedIn = document.getElementById('vid-seed');
+    if (seedIn && String(seedIn.value).trim() !== '') payload.seed = parseInt(seedIn.value, 10);
+    // 承接上一镜头末帧（仅首帧类模型可用）
+    var cwrap = document.getElementById('vid-cont-wrap');
+    var cchk = document.getElementById('vid-cont-chk');
+    if (cwrap && cchk && cwrap.style.display !== 'none') payload.continuation = cchk.checked;
+    // 已指定的镜头首帧（data-uri），仅随选中镜头下发
+    var ff = {}, hasFF = false;
+    var want = (numbers && numbers.length) ? numbers : null;
+    Object.keys(SHOT_FIRST_FRAMES).forEach(function (k) {
+        if (!SHOT_FIRST_FRAMES[k]) return;
+        if (want && want.indexOf(parseInt(k, 10)) < 0) return;
+        ff[k] = SHOT_FIRST_FRAMES[k]; hasFF = true;
+    });
+    // v6：尾帧（键 "镜头号_last"），wan3.0 首尾帧生视频用
+    Object.keys(SHOT_LAST_FRAMES).forEach(function (k) {
+        if (!SHOT_LAST_FRAMES[k]) return;
+        if (want && want.indexOf(parseInt(k, 10)) < 0) return;
+        ff[k + '_last'] = SHOT_LAST_FRAMES[k]; hasFF = true;
+    });
+    if (hasFF) payload.first_frames = ff;
+    return payload;
+}
+
+async function submitVideos(numbers, force) {
+    var payload = buildVideoPayload(numbers, force);
+    var n = (payload.shot_numbers && payload.shot_numbers.length) || MEDIA_SHOTS.length;
+    mediaMsg('⏳ 正在逐个提交 ' + n + ' 个镜头，请稍候（下面会出现每个镜头的排队/生成状态）...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/videos', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        var skipped = d.skipped || [];
+        var errs = d.errors || [];
+        var warns = d.warnings || [];
+        var submitted = d.submitted || [];
+        var msg = '✅ 已提交 ' + submitted.length + ' 个视频任务'
+            + (errs.length ? '；失败：' + errs.join(' | ') : '')
+            + (warns.length ? '；⚠ ' + warns.join(' | ') : '')
+            + (skipped.length ? '；⚠ ' + skipped.length + ' 个已完成镜头被跳过（#' + skipped.join(',#')
+                + '）——要按新 prompt 重做，请勾选后点「生成所选镜头视频」，或点视频卡片上的「🔄 重做」' : '')
+            + '。进度每 3 秒自动刷新';
+        mediaMsg(msg, errs.length > 0 || (!submitted.length && skipped.length > 0));
+        renderVideos(d.videos);
+        startVideoPoll();
+    } catch (e) { mediaMsg('❌ ' + e, true); }
+}
+
+async function mediaSubmitVideos() {
+    var m = (document.getElementById('vid-model-sel') || {}).value || '所选模型';
+    if (!confirm('用 ' + m + ' 提交全部镜头的视频生成任务？')) return;
+    await submitVideos(null);
+}
+
+function toggleAllShots(on) {
+    document.querySelectorAll('.shot-chk').forEach(function (c) { c.checked = on; });
+}
+
+function selectedShotNumbers() {
+    var arr = [];
+    document.querySelectorAll('.shot-chk:checked').forEach(function (c) {
+        arr.push(parseInt(c.value, 10));
+    });
+    return arr;
+}
+
+async function mediaSubmitSelectedVideos() {
+    var nums = selectedShotNumbers();
+    if (!nums.length) { mediaMsg('❌ 请先勾选要生成视频的镜头（或点「全选」）', true); return; }
+    if (!confirm('提交所选 ' + nums.length + ' 个镜头（#' + nums.join(', #') + '）的视频生成任务？\n已完成的镜头会按最新 prompt 重新生成并覆盖。')) return;
+    await submitVideos(nums, true);
+}
+
+// 一键连续生成：第 1 镜完成 → 自动抽尾帧 → 作下一镜首帧 → …… → 全部完成
+async function chainVideos() {
+    var picked = selectedShotNumbers();
+    var nums = picked.length ? picked : MEDIA_SHOTS.map(function (s) { return s.shot_number; });
+    if (!nums.length) { mediaMsg('❌ 还没有分镜，无法连续生成', true); return; }
+    var scope = picked.length ? ('勾选的 ' + nums.length + ' 个镜头') : ('全部 ' + nums.length + ' 个镜头');
+    if (!confirm('连续生成 ' + scope + '？\n\n第 1 镜：有首帧/场景参考图就走图生视频，没有则纯文生视频；\n后续镜头：自动抽取上一镜尾帧作为首帧（文+图）。\n\n全程串行，耗时较长，期间可离开页面，回来仍能看到进度。')) return;
+    var payload = buildVideoPayload(nums, false);
+    delete payload.continuation;   // 连续生成自动承接，无需手动开关
+    // 首帧只保留人工指定的（键 "镜头号_last" 是尾帧，连续生成不使用）
+    if (payload.first_frames) {
+        var clean = {};
+        Object.keys(payload.first_frames).forEach(function (k) {
+            if (k.indexOf('_last') < 0) clean[k] = payload.first_frames[k];
+        });
+        if (Object.keys(clean).length) payload.first_frames = clean;
+        else delete payload.first_frames;
+    }
+    mediaMsg('⏳ 正在启动连续生成...', false);
+    try {
+        var r = await fetch('/api/projects/' + MEDIA_PID + '/media/videos/chain', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        mediaMsg('🔗 连续生成已启动：共 ' + d.total + ' 个镜头（#' + (d.shots || []).join(', #')
+            + '），第 1 镜完成后自动对接下一镜', false);
+        startVideoPoll();
+    } catch (e) { mediaMsg('❌ ' + e, true); }
+}
+
+async function mediaRefreshVideos() {
+    mediaMsg('⏳ 正在刷新视频进度...', false);
+    var r = await fetch('/api/projects/' + MEDIA_PID + '/media/videos', {cache: 'no-store'});
+    var d = await r.json();
+    renderVideos(d.videos);
+    renderChainBar(d.chain || {});
+    var done = (d.videos || []).filter(function (v) { return v.status === 'DONE'; }).length;
+    mediaMsg('视频完成 ' + done + '/' + (d.videos || []).length, false);
+}
+
+function renderVideos(videos) {
+    videos = videos || [];
+    // 建立镜头号 → 视频记录索引，供分镜表状态列使用
+    VIDEO_BY_NUM = {};
+    videos.forEach(function (v) { if (v && v.shot_number != null) VIDEO_BY_NUM[v.shot_number] = v; });
+    refreshShotStatusCells();
+
+    var el = document.getElementById('videos-view');
+    if (!videos.length) { el.innerHTML = ''; return; }
+
+    // 顶部汇总：已完成按全片镜头数算，未提交的镜头也能看出还差多少
+    var cnt = {QUEUED: 0, PENDING: 0, RUNNING: 0, DONE: 0, FAILED: 0};
+    videos.forEach(function (v) { if (cnt[v.status] != null) cnt[v.status] += 1; });
+    var totalShots = Math.max(videos.length, MEDIA_SHOTS.length);
+    var pct = Math.round(cnt.DONE / totalShots * 100);
+    var head = '<div style="margin-bottom:0.6em;padding:0.5em 0.7em;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px">'
+        + '<div style="font-size:0.83em;color:#c7c7da">📊 视频进度：已完成 <b style="color:#34d399">' + cnt.DONE + '</b>/' + totalShots
+        + (videos.length < totalShots ? ' · 未提交 ' + (totalShots - videos.length) : '')
+        + (cnt.RUNNING ? ' · 🎬 生成中 ' + cnt.RUNNING : '')
+        + (cnt.PENDING ? ' · ☁️ 云端排队 ' + cnt.PENDING : '')
+        + (cnt.QUEUED ? ' · ⏳ 排队 ' + cnt.QUEUED : '')
+        + (cnt.FAILED ? ' · <span style="color:#f87171">❌ 失败 ' + cnt.FAILED + '</span>' : '')
+        + '</div>'
+        + '<div style="height:6px;margin-top:0.4em;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden">'
+        + '<div style="width:' + pct + '%;height:100%;background:linear-gradient(90deg,#34d399,#67e8f9)"></div></div></div>';
+
+    var cards = videos.map(function (v) {
+        var body;
+        if (v.status === 'DONE' && v.video_file) {
+            // ?v=task_id 破浏览器缓存：重做后 task_id 变→拉取新视频（serve_video 忽略该 query）
+            var src = '/api/projects/' + MEDIA_PID + '/media/videos/' + v.video_file
+                + '?v=' + encodeURIComponent(v.task_id || v.video_file);
+            body = '<video src="' + src + '" controls style="width:230px;border-radius:8px"></video>'
+                + '<button class="btn-secondary" style="width:100%;margin-top:0.3em;font-size:0.72em;padding:0.2em 0.4em" '
+                + 'onclick="regenShot(' + v.shot_number + ')">🔄 按最新 prompt 重做此镜头</button>';
+        } else if (v.status === 'FAILED') {
+            body = '<div style="color:#f87171;font-size:0.8em;max-width:230px">' + (v.error || '失败') + '</div>'
+                + '<button class="btn-secondary" style="margin-top:0.3em;font-size:0.72em;padding:0.2em 0.5em" '
+                + 'onclick="regenShot(' + v.shot_number + ')">🔄 重试此镜头</button>';
+        } else {
+            var stt = VIDEO_STATUS_MAP[v.status] || [(v.status || '未知'), '#67e8f9'];
+            var extra = '';
+            if (v.status === 'QUEUED') {
+                var pos = (CHAIN_STATE.shots || []).indexOf(v.shot_number);
+                if (pos >= 0) extra = '（链中第 ' + (pos + 1) + ' 位）';
+            }
+            body = '<div style="color:' + stt[1] + ';font-size:0.8em">' + stt[0] + extra + '</div>';
+        }
+        return '<div style="display:inline-block;margin:0.4em;padding:0.5em;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;vertical-align:top">'
+            + '<div style="font-size:0.85em;margin-bottom:0.3em">镜头 ' + v.shot_number
+            + ' <span style="color:#7a7a90">' + (v.model || '').replace('kling/', '') + '</span></div>'
+            + body + '</div>';
+    }).join('');
+    el.innerHTML = head + cards;
+}
+
+// 连续生成进度条（刷页面后依然能看到跑到第几个镜头）
+function renderChainBar(c) {
+    CHAIN_STATE = (c && typeof c === 'object') ? c : {};
+    var bar = document.getElementById('chain-bar');
+    if (!bar) return;
+    if (!CHAIN_STATE.total) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    var pct = Math.round((CHAIN_STATE.done || 0) / CHAIN_STATE.total * 100);
+    var head = CHAIN_STATE.active ? '🔗 连续生成进行中'
+        : (CHAIN_STATE.error ? '🔗 连续生成已中止' : '🔗 连续生成已完成');
+    bar.style.display = 'block';
+    bar.innerHTML = '<div>' + head + '：已完成 ' + (CHAIN_STATE.done || 0) + '/' + CHAIN_STATE.total + ' 个镜头'
+        + (CHAIN_STATE.active && CHAIN_STATE.current ? '，正在生成 #' + CHAIN_STATE.current : '')
+        + (CHAIN_STATE.error ? '；' + esc(CHAIN_STATE.error) : '')
+        + '</div>'
+        + '<div style="height:5px;margin-top:0.35em;background:rgba(255,255,255,0.12);border-radius:3px;overflow:hidden">'
+        + '<div style="width:' + pct + '%;height:100%;background:#67e8f9"></div></div>';
+}
+
+// 单个镜头按最新 prompt 强制重做（force=true，覆盖已完成结果）
+function regenShot(num) {
+    if (!confirm('按最新 prompt 重新生成镜头 #' + num + ' 的视频？（将覆盖现有结果）')) return;
+    submitVideos([num], true);
+}
+
+// ── 视频进度自动轮询：排队/生成中/完成/失败都实时可见 ──
+var VIDEO_POLL_TIMER = null;
+function stopVideoPoll() {
+    if (VIDEO_POLL_TIMER) { clearInterval(VIDEO_POLL_TIMER); VIDEO_POLL_TIMER = null; }
+}
+
+// 拉一次视频/链状态并刷新界面；返回是否仍有进行中的任务
+async function pollVideosOnce() {
+    var r = await fetch('/api/projects/' + MEDIA_PID + '/media/videos', {cache: 'no-store'});
+    var d = await r.json();
+    var all = d.videos || [];
+    var chain = d.chain || {};
+    renderVideos(all);
+    renderChainBar(chain);
+    var active = all.filter(function (v) {
+        return v.status === 'QUEUED' || v.status === 'PENDING' || v.status === 'RUNNING';
+    });
+    var done = all.filter(function (v) { return v.status === 'DONE'; }).length;
+    var failed = all.filter(function (v) { return v.status === 'FAILED'; }).length;
+    var totalShots = Math.max(all.length, MEDIA_SHOTS.length);
+    mediaMsg('视频：完成 ' + done + '/' + totalShots
+        + (chain.active ? '，连续生成 ' + (chain.done || 0) + '/' + chain.total
+            + (chain.current ? '（正在镜头 #' + chain.current + '）' : '') : '')
+        + (failed ? '，失败 ' + failed + '（见卡片红字原因）' : '')
+        + (active.length ? '，' + active.length + ' 个未完成（每 3 秒自动刷新）' : ''),
+        failed > 0 || !!chain.error);
+    return active.length > 0 || !!chain.active;
+}
+
+function startVideoPoll() {
+    stopVideoPoll();
+    var tick = async function () {
+        try {
+            var more = await pollVideosOnce();
+            if (!more) stopVideoPoll();
+        } catch (e) { /* 忽略单次轮询失败 */ }
+    };
+    VIDEO_POLL_TIMER = setInterval(tick, 3000);
+    tick();   // 点击后立即刷新一次，马上看到排队/生成中
+}
+
+// 页面加载时恢复已有媒体产物（no-store 防缓存；从 Prompt 中心返回时用 pageshow 重拉）
+onStoryVidModel();
+async function reloadMediaData() {
+    try {
+        var rs = await fetch('/api/projects/' + MEDIA_PID + '/media/storyboard', {cache: 'no-store'});
+        var dsb = await rs.json();
+        if (dsb.shots && dsb.shots.length) renderStoryboard(dsb.shots);
+        var rv = await fetch('/api/projects/' + MEDIA_PID + '/media/videos', {cache: 'no-store'});
+        var dv = await rv.json();
+        renderVideos(dv.videos || []);
+        renderChainBar(dv.chain || {});
+        var active = (dv.videos || []).some(function (v) {
+            return v.status === 'QUEUED' || v.status === 'PENDING' || v.status === 'RUNNING';
+        });
+        if (active || (dv.chain && dv.chain.active)) startVideoPoll();
+    } catch (e) { /* ignore */ }
+}
+(async function () {
+    try {
+        var rc = await fetch('/api/projects/' + MEDIA_PID + '/media/characters', {cache: 'no-store'});
+        var dc = await rc.json();
+        if (dc.characters && dc.characters.length) renderCharCards(dc.characters);
+    } catch (e) { /* ignore */ }
+    await reloadMediaData();
+})();
+// 从 bfcache/浏览器返回时重新拉取，确保看到 Prompt 中心的最新保存
+window.addEventListener('pageshow', function (e) { if (e.persisted) reloadMediaData(); });
+</script>
+{% endblock %}

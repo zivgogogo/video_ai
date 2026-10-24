@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AI 剧本创作工具 v5{% endblock %}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
+    <script src="/static/js/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 粒子背景 -->
+    <canvas id="particle-canvas"></canvas>
+
+    <nav class="navbar">
+        <div class="nav-left">
+            <a href="/" class="nav-brand">🎬 AI 剧本创作工具 <span style="font-size:0.7em;color:#67e8f9;vertical-align:middle">v5</span></a>
+            {% if project_count is defined and project_count > 0 %}
+            <span class="nav-count">
+                {% if project_index is defined %}
+                项目 {{ project_index }}/{{ project_count }}
+                {% else %}
+                共 {{ project_count }} 个项目
+                {% endif %}
+            </span>
+            {% endif %}
+        </div>
+        <div class="nav-right" style="display:flex;gap:0.4em;align-items:center">
+            <a href="/workbench" class="nav-link">🎨 创作工作台</a>
+            <a href="/projects/new" class="nav-link">新建项目</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <script src="/static/js/particles.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}项目列表 — AI 剧本创作工具{% endblock %}
+{% block content %}
+<h1>我的项目</h1>
+<div class="project-list">
+    {% if projects %}
+        {% for p in projects %}
+        <div class="project-card">
+            <h3><a href="/projects/{{ p.id }}">{{ p.title }}</a></h3>
+            <span class="badge">{{ p.script_type }}</span>
+            <span class="status {{ p.status }}">{{ p.status }}</span>
+            <time>{{ p.updated_at[:10] if p.updated_at }}</time>
+            <button class="btn-danger"
+                    hx-delete="/api/projects/{{ p.id }}"
+                    hx-confirm="确定要删除项目「{{ p.title }}」吗？此操作不可撤销。"
+                    hx-target="closest .project-card"
+                    hx-swap="delete"
+                    style="margin-left:auto">删除</button>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty">
+            <p style="font-size:1.1em;margin-bottom:0.5em">还没有项目</p>
+            <a href="/projects/new" class="btn" style="display:inline-flex;text-decoration:none">创建第一个项目</a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+python-dotenv==1.1.0
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+sqlalchemy==2.0.35
+jinja2==3.1.4
+python-multipart==0.0.12
+anthropic==0.40.0
+openai==1.60.0
+google-genai==1.14.0
+python-docx==1.1.2
+markdown==3.7
+pyyaml==6.0.3
+fpdf2==2.8.2
+pytest==8.3.0
+httpx>=0.28.1
+# v4：抽取视频末帧（长视频承接），自带 ffmpeg 二进制，免系统安装
+imageio-ffmpeg==0.5.1
+# v6：CosyVoice 角色配音（语音合成），走 DashScope SDK（WebSocket），复用现有 DASHSCOPE_API_KEY
+dashscope>=1.26.4

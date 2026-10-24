@@ -1,0 +1,69 @@
+# ============================================================
+# AI 剧本工具 —— 仅保留核心源码，忽略运行环境 / 产物 / 备份
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 虚拟环境 ----------
+venv/
+.venv/
+env/
+ENV/
+
+# ---------- 环境变量与密钥 ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 运行时数据（剧本 / 媒体 / 导出 / 上传） ----------
+storage/
+uploads/
+cache/
+exports/
+*.sqlite
+*.sqlite3
+
+# ---------- 生成产物与历史打点备份 ----------
+*.log
+logs/
+*.tmp
+*.bak
+*.orig
+*.pre_*
+*.step1
+storyboard_*.json
+角色一致性测试/*_report_*.json
+角色一致性测试/test_progress_*.json
+
+# ---------- 音视频等大体积素材 ----------
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.mp3
+*.m4a
+*.srt
+Dreamy F1/
+角色一致性测试/test_videos/
+
+# ---------- 备份目录 / 历史快照 ----------
+_v3_backup/
+_backup_*/
+
+# ---------- 编辑器与系统 ----------
+.vscode/
+.idea/
+.claude/
+.mcp.json
+openspec/
+.DS_Store
+Thumbs.db
+desktop.ini

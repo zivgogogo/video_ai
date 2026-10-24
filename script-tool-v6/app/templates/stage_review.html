@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Stage {{ stage }} — {{ project.title }}{% endblock %}
+{% block content %}
+<h1>{{ project.title }} — Stage {{ stage }} 中间结果</h1>
+
+<div id="stage-content" hx-get="/api/projects/{{ project.id }}/stage/{{ stage }}" hx-trigger="load">
+    <p style="color:var(--fg-muted);text-align:center;padding:2em">加载中...</p>
+</div>
+
+<div style="margin-top:1.5em">
+    <a href="/projects/{{ project.id }}" class="btn btn-secondary" style="display:inline-flex;text-decoration:none">返回工作台</a>
+</div>
+
+<script>
+document.getElementById('stage-content').addEventListener('htmx:afterSwap', function(e) {
+    const data = JSON.parse(e.detail.xhr.responseText);
+    if (data.status === 'not_run') {
+        e.target.innerHTML = '<div class="empty">该阶段尚未运行，请先生成剧本。</div>';
+        return;
+    }
+    if (data.status === 'error') {
+        e.target.innerHTML = '<div class="empty">加载数据失败。</div>';
+        return;
+    }
+    if (data.data) {
+        {% if stage == 5 %}
+        const text = data.data.screenplay_text || data.data.yaml_text || '';
+        if (text) {
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'max-height:70vh;overflow:auto;background:rgba(0,0,0,0.4);border:1px solid var(--glass-border);border-radius:var(--radius);padding:1.5em;white-space:pre-wrap;font-size:0.9em;line-height:1.8;font-family:var(--font-sans);color:#d4d4d4';
+            pre.textContent = text.substring(0, 100000);
+            e.target.innerHTML = '';
+            e.target.appendChild(pre);
+        } else {
+            e.target.innerHTML = '<div class="empty">剧本数据为空。</div>';
+        }
+        {% else %}
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'max-height:70vh;overflow:auto;background:rgba(0,0,0,0.4);border:1px solid var(--glass-border);border-radius:var(--radius);padding:1em;font-family:var(--font-mono);font-size:0.8em;color:var(--fg-secondary);white-space:pre-wrap';
+        pre.textContent = JSON.stringify(data.data, null, 2);
+        e.target.innerHTML = '';
+        e.target.appendChild(pre);
+        {% endif %}
+    }
+});
+</script>
+{% endblock %}

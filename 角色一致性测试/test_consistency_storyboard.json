@@ -1,0 +1,76 @@
+{
+  "title": "角色一致性测试 - 苏清雨的一天",
+  "genre": "测试用例",
+  "summary": "测试同一角色在不同场景、不同服装、不同表情下的一致性保持能力",
+  "total_duration": 30,
+  "test_purpose": "验证角色一致性机制在实际视频生成中的效果",
+  "characters_to_test": [
+    {
+      "name": "苏清雨",
+      "description": "25岁东亚女性，长黑发，身材苗条，五官精致",
+      "appearance_count": 5,
+      "test_scenes": [
+        "咖啡店工作",
+        "公园散步",
+        "家中阅读",
+        "健身房运动",
+        "晚宴聚会"
+      ]
+    }
+  ],
+  "shots": [
+    {
+      "shot_number": 1,
+      "scene": "咖啡店 - 白天",
+      "description": "苏清雨穿着白色围裙在咖啡店吧台后制作咖啡，阳光透过窗户洒在她身上",
+      "prompt": "Medium shot, bright natural lighting. A young East Asian woman with long black hair wearing a white apron over a casual blue shirt stands behind a wooden coffee counter. She is carefully pouring latte art into a ceramic cup. Warm sunlight streams through large windows, creating soft shadows. Modern coffee shop interior with espresso machines and pastry display. Cinematic shallow depth of field.",
+      "duration": 6,
+      "character_focus": "苏清雨",
+      "character_state": "工作装、专注表情"
+    },
+    {
+      "shot_number": 2,
+      "scene": "城市公园 - 下午",
+      "description": "苏清雨穿着运动装在公园小径上慢跑，微风吹动她的长发",
+      "prompt": "Tracking shot, afternoon golden hour light. The same young East Asian woman with long black hair jogging on a tree-lined park path. She wears a pink sports bra and black leggings, hair flowing behind her. Dappled sunlight filters through autumn leaves. Other joggers blurred in background. Dynamic motion, healthy glow on her face.",
+      "duration": 6,
+      "character_focus": "苏清雨",
+      "character_state": "运动装、活力表情"
+    },
+    {
+      "shot_number": 3,
+      "scene": "温馨公寓 - 晚上",
+      "description": "苏清雨穿着舒适的家居服坐在沙发上阅读，台灯发出温暖的光",
+      "prompt": "Close-up interior shot, warm ambient lighting. The same young East Asian woman with long black hair sitting on a cozy sofa, wearing an oversized cream sweater and reading a book. Soft lamplight illuminates her face, creating intimate atmosphere. Bookshelves and house plants visible in background. Relaxed, peaceful expression.",
+      "duration": 6,
+      "character_focus": "苏清雨",
+      "character_state": "家居服、放松表情"
+    },
+    {
+      "shot_number": 4,
+      "scene": "健身房 - 傍晚",
+      "description": "苏清雨在健身房做瑜伽拉伸，穿着紧身运动服，表情专注",
+      "prompt": "Wide shot, cool fluorescent gym lighting. The same young East Asian woman with long black hair tied in a ponytail, wearing form-fitting yoga attire in purple. She is performing a standing yoga pose on a blue mat. Mirrors and gym equipment visible in background. Focused, determined expression on her face.",
+      "duration": 6,
+      "character_focus": "苏清雨",
+      "character_state": "瑜伽服、专注表情"
+    },
+    {
+      "shot_number": 5,
+      "scene": "高级餐厅 - 夜晚",
+      "description": "苏清雨穿着优雅的晚礼服参加晚宴，化着精致妆容，微笑交谈",
+      "prompt": "Elegant medium shot, sophisticated restaurant ambiance with dim warm lighting. The same young East Asian woman with long black hair styled beautifully, wearing an elegant black evening dress. She sits at a candlelit table, smiling gracefully while conversing. Wine glasses and fine dining setup. Polished makeup, confident and radiant appearance.",
+      "duration": 6,
+      "character_focus": "苏清雨",
+      "character_state": "晚礼服、优雅微笑"
+    }
+  ],
+  "evaluation_criteria": [
+    "面部特征是否一致（五官、脸型）",
+    "发型发色是否保持一致（长黑发）",
+    "身材体型是否统一",
+    "种族特征是否稳定（东亚女性）",
+    "服装变化是否合理（应随场景变化）",
+    "表情变化是否自然（应符合场景）"
+  ]
+}
